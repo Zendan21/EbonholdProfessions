@@ -1,4 +1,4 @@
-EBONHOLD PROFESSIONS 1.6.0
+EBONHOLD PROFESSIONS 1.6.2
 ====================
 
 For the Wrath of the Lich King 3.3.5 client used by Project Ebonhold.

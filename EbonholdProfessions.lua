@@ -1,6 +1,6 @@
 local addonName = ...
 
-local ADDON_VERSION = "1.6.0"
+local ADDON_VERSION = "1.6.2"
 local PREFIX = "|cff58c6ffEbonhold Professions:|r "
 local PANEL_WIDTH = 500
 local PANEL_PADDING = 16
@@ -543,7 +543,10 @@ local function CreateProfessionButton(index)
         insets = { left = 3, right = 3, top = 3, bottom = 3 },
     })
     SetButtonBackdrop(button, 0.055, 0.065, 0.085, 0.98)
-    button:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    -- Only left-click is registered as a secure action. Right-click is
+    -- handled separately below so older 3.3.5 clients cannot confuse the
+    -- context-menu click with the profession action.
+    button:RegisterForClicks("LeftButtonUp")
 
     button.icon = button:CreateTexture(nil, "ARTWORK")
     button.icon:SetWidth(38)
@@ -581,7 +584,7 @@ local function CreateProfessionButton(index)
 
     button:SetScript("OnEnter", ProfessionButton_OnEnter)
     button:SetScript("OnLeave", ProfessionButton_OnLeave)
-    button:SetScript("OnClick", function(self, mouseButton)
+    button:SetScript("OnMouseUp", function(self, mouseButton)
         if mouseButton == "RightButton" and OpenProfessionMenu then
             OpenProfessionMenu(self)
         end
@@ -1007,31 +1010,60 @@ local function FindAllowedBagSlot(entryKey, minimumCount)
 end
 
 local function ConfigureSecureAction(button, profession)
+    local actionType
+    local spellName
+    local macroText
+
+    if profession.actionName then
+        actionType = "spell"
+        spellName = profession.actionName
+
+        if profession.itemProcessor then
+            local bag, slot = FindAllowedBagSlot(
+                profession.key,
+                profession.minimumCount
+            )
+            if bag and slot then
+                actionType = "macro"
+                spellName = nil
+                macroText =
+                    "/cast "
+                    .. profession.actionName
+                    .. "\n/use "
+                    .. bag
+                    .. " "
+                    .. slot
+            end
+        end
+    end
+
+    -- Ebonhold's 3.3.5 client can leave a recycled secure button inert when
+    -- its action is rewritten while the button is shown. Re-arm it hidden,
+    -- then restore its prior shown state.
+    local wasShown = button:IsShown()
+    button:Hide()
+    button:SetAttribute("type", nil)
+    button:SetAttribute("spell", nil)
+    button:SetAttribute("macrotext", nil)
     button:SetAttribute("type1", nil)
     button:SetAttribute("spell1", nil)
     button:SetAttribute("macrotext1", nil)
 
-    if not profession.actionName then
-        return
+    if actionType then
+        -- The unsuffixed attributes are the original SecureActionButton
+        -- contract. Keep the numbered left-button aliases as well for
+        -- compatibility with both stock and custom 3.3.5 clients.
+        button:SetAttribute("type", actionType)
+        button:SetAttribute("spell", spellName)
+        button:SetAttribute("macrotext", macroText)
+        button:SetAttribute("type1", actionType)
+        button:SetAttribute("spell1", spellName)
+        button:SetAttribute("macrotext1", macroText)
     end
 
-    if profession.itemProcessor then
-        local bag, slot = FindAllowedBagSlot(
-            profession.key,
-            profession.minimumCount
-        )
-        if bag and slot then
-            button:SetAttribute("type1", "macro")
-            button:SetAttribute(
-                "macrotext1",
-                "/cast " .. profession.actionName .. "\n/use " .. bag .. " " .. slot
-            )
-            return
-        end
+    if wasShown then
+        button:Show()
     end
-
-    button:SetAttribute("type1", "spell")
-    button:SetAttribute("spell1", profession.actionName)
 end
 
 RefreshProcessingActions = function()
@@ -1041,7 +1073,7 @@ RefreshProcessingActions = function()
     end
 
     for index, button in ipairs(professionButtons) do
-        if button.professionData and button:IsShown() then
+        if button.professionData then
             ConfigureSecureAction(button, button.professionData)
 
             local hotkeyButton = hotkeyButtons[index]
@@ -1557,6 +1589,9 @@ local function ConfigureHotkeyButton(index, profession)
         button:Show()
         hotkeyTargets[profession.key] = button
     else
+        button:SetAttribute("type", nil)
+        button:SetAttribute("spell", nil)
+        button:SetAttribute("macrotext", nil)
         button:SetAttribute("type1", nil)
         button:SetAttribute("spell1", nil)
         button:SetAttribute("macrotext1", nil)
@@ -1633,18 +1668,21 @@ function EbonholdProfessions_Refresh()
     end
 
     for index = #known + 1, #professionButtons do
+        professionButtons[index]:Hide()
         professionButtons[index].entryKey = nil
         professionButtons[index].hotkey = nil
         professionButtons[index].itemProcessor = nil
         professionButtons[index].professionData = nil
         professionButtons[index].hotkeyLabel:SetText("")
-        professionButtons[index]:Hide()
     end
     for index = #known + 1, #hotkeyButtons do
+        hotkeyButtons[index]:Hide()
+        hotkeyButtons[index]:SetAttribute("type", nil)
+        hotkeyButtons[index]:SetAttribute("spell", nil)
+        hotkeyButtons[index]:SetAttribute("macrotext", nil)
         hotkeyButtons[index]:SetAttribute("type1", nil)
         hotkeyButtons[index]:SetAttribute("spell1", nil)
         hotkeyButtons[index]:SetAttribute("macrotext1", nil)
-        hotkeyButtons[index]:Hide()
     end
 
     if #known == 0 then
