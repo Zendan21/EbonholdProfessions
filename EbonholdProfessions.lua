@@ -1,6 +1,6 @@
 local addonName = ...
 
-local ADDON_VERSION = "1.1.0"
+local ADDON_VERSION = "1.2.0"
 local PREFIX = "|cff58c6ffEbonhold Professions:|r "
 local PANEL_WIDTH = 500
 local PANEL_PADDING = 16
@@ -8,11 +8,7 @@ local BUTTON_WIDTH = 226
 local BUTTON_HEIGHT = 52
 local BUTTON_GAP = 8
 local COLUMNS = 2
-local MACRO_NAME = "Professions"
-local MACRO_FALLBACK_NAME = "Ebon Prof"
-local MACRO_ICON = "INV_Misc_Book_09"
 local LAUNCHER_ICON = "Interface\\Icons\\INV_Misc_Book_09"
-local MACRO_BODY = "/ehp"
 local SPELL_BOOK_TYPE = BOOKTYPE_SPELL or "spell"
 
 -- skillSpellID supplies the localized profession name. actionSpellID is the
@@ -121,12 +117,11 @@ local fallbackNames = {
 }
 
 local eventFrame = CreateFrame("Frame")
-local macroDelayFrame = CreateFrame("Frame")
 local panel
 local launcherButton
+local minimapButton
 local professionButtons = {}
 local refreshPending
-local macroCreationScheduled
 local lastScanDetails = {
     skillCount = 0,
     spellCount = 0,
@@ -685,7 +680,106 @@ local function CreateLauncherButton()
         GameTooltip:Show()
     end)
     launcherButton:SetScript("OnLeave", ProfessionButton_OnLeave)
-    launcherButton:Hide()
+
+    if EbonholdProfessionsDB.floatingButtonShown then
+        launcherButton:Show()
+    else
+        launcherButton:Hide()
+    end
+end
+
+local function SetMinimapButtonPosition(x, y)
+    minimapButton:ClearAllPoints()
+    minimapButton:SetPoint("CENTER", Minimap, "CENTER", x, y)
+end
+
+local function UpdateMinimapButtonPosition()
+    local scale = Minimap:GetEffectiveScale()
+    local cursorX, cursorY = GetCursorPosition()
+    local centerX, centerY = Minimap:GetCenter()
+
+    cursorX = cursorX / scale
+    cursorY = cursorY / scale
+
+    local deltaX = cursorX - centerX
+    local deltaY = cursorY - centerY
+    local distance = math.sqrt(deltaX * deltaX + deltaY * deltaY)
+    if distance < 1 then
+        return
+    end
+
+    local radius = 78
+    local x = deltaX / distance * radius
+    local y = deltaY / distance * radius
+    EbonholdProfessionsDB.minimapX = x
+    EbonholdProfessionsDB.minimapY = y
+    SetMinimapButtonPosition(x, y)
+end
+
+local function CreateMinimapButton()
+    minimapButton = CreateFrame("Button", addonName .. "MinimapButton", Minimap)
+    minimapButton:SetWidth(32)
+    minimapButton:SetHeight(32)
+    minimapButton:SetFrameStrata("MEDIUM")
+    minimapButton:SetFrameLevel(Minimap:GetFrameLevel() + 8)
+    minimapButton:RegisterForClicks("LeftButtonUp")
+    minimapButton:RegisterForDrag("RightButton")
+
+    SetMinimapButtonPosition(
+        EbonholdProfessionsDB.minimapX or -55,
+        EbonholdProfessionsDB.minimapY or -55
+    )
+
+    minimapButton.background = minimapButton:CreateTexture(nil, "BACKGROUND")
+    minimapButton.background:SetWidth(24)
+    minimapButton.background:SetHeight(24)
+    minimapButton.background:SetPoint("CENTER")
+    minimapButton.background:SetTexture("Interface\\Minimap\\UI-Minimap-Background")
+
+    minimapButton.icon = minimapButton:CreateTexture(nil, "ARTWORK")
+    minimapButton.icon:SetWidth(20)
+    minimapButton.icon:SetHeight(20)
+    minimapButton.icon:SetPoint("CENTER")
+    minimapButton.icon:SetTexture(LAUNCHER_ICON)
+    minimapButton.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+    minimapButton.border = minimapButton:CreateTexture(nil, "OVERLAY")
+    minimapButton.border:SetWidth(54)
+    minimapButton.border:SetHeight(54)
+    minimapButton.border:SetPoint("TOPLEFT")
+    minimapButton.border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+
+    minimapButton.highlight = minimapButton:CreateTexture(nil, "HIGHLIGHT")
+    minimapButton.highlight:SetWidth(32)
+    minimapButton.highlight:SetHeight(32)
+    minimapButton.highlight:SetPoint("CENTER")
+    minimapButton.highlight:SetTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+    minimapButton.highlight:SetBlendMode("ADD")
+
+    minimapButton:SetScript("OnClick", function()
+        EbonholdProfessions_Toggle()
+    end)
+    minimapButton:SetScript("OnDragStart", function(self)
+        self:SetScript("OnUpdate", UpdateMinimapButtonPosition)
+    end)
+    minimapButton:SetScript("OnDragStop", function(self)
+        self:SetScript("OnUpdate", nil)
+        UpdateMinimapButtonPosition()
+    end)
+    minimapButton:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+        GameTooltip:SetText("Ebonhold Professions", 1, 0.82, 0)
+        GameTooltip:AddLine("Left-click: open professions", 1, 1, 1)
+        GameTooltip:AddLine("Right-drag: move around the minimap", 0.65, 0.7, 0.78)
+        GameTooltip:Show()
+    end)
+    minimapButton:SetScript("OnLeave", ProfessionButton_OnLeave)
+
+    if EbonholdProfessionsDB.minimapButtonShown then
+        minimapButton:Show()
+    else
+        minimapButton:Hide()
+    end
 end
 
 function EbonholdProfessions_Refresh()
@@ -795,107 +889,6 @@ function EbonholdProfessions_Toggle()
     end
 end
 
-local function IsOurMacro(index)
-    if not index or index == 0 then
-        return false
-    end
-
-    local _, _, body = GetMacroInfo(index)
-    return Trim(body) == MACRO_BODY
-end
-
-local function CreateLauncherMacro(reportExisting)
-    if type(GetMacroIndexByName) ~= "function"
-        or type(GetMacroInfo) ~= "function"
-        or type(GetNumMacros) ~= "function"
-        or type(CreateMacro) ~= "function"
-    then
-        Print("this client has disabled one or more macro APIs.")
-        Print("Create a macro manually with this one line: |cffffffff/ehp|r")
-        launcherButton:Show()
-        return false
-    end
-
-    local existing = GetMacroIndexByName(MACRO_NAME)
-    if IsOurMacro(existing) then
-        launcherButton:Hide()
-        if reportExisting then
-            Print("the |cffffffff" .. MACRO_NAME .. "|r macro is ready to drag onto an action bar.")
-        end
-        return true
-    end
-
-    local macroName = MACRO_NAME
-    if existing and existing > 0 then
-        local fallback = GetMacroIndexByName(MACRO_FALLBACK_NAME)
-        if IsOurMacro(fallback) then
-            launcherButton:Hide()
-            if reportExisting then
-                Print("the |cffffffff" .. MACRO_FALLBACK_NAME .. "|r macro is ready to drag onto an action bar.")
-            end
-            return true
-        elseif fallback and fallback > 0 then
-            Print("could not create a launcher macro because both preferred names are already in use.")
-            launcherButton:Show()
-            return false
-        end
-        macroName = MACRO_FALLBACK_NAME
-    end
-
-    local _, characterMacroCount = GetNumMacros()
-    characterMacroCount = characterMacroCount or 0
-    if characterMacroCount >= (MAX_CHARACTER_MACROS or 18) then
-        Print("could not create the launcher because your character macro slots are full.")
-        Print("Free one slot, then type |cffffffff/ehp macro|r.")
-        launcherButton:Show()
-        return false
-    end
-
-    local createOK, created = pcall(CreateMacro, macroName, MACRO_ICON, MACRO_BODY, 1)
-    if not createOK then
-        Print("the client refused automatic macro creation: " .. tostring(created))
-        Print("Create a macro manually with this one line: |cffffffff/ehp|r")
-        launcherButton:Show()
-        return false
-    end
-
-    -- Some 3.3.5 clients return nil from CreateMacro even when it succeeds.
-    -- Verify the macro list rather than relying on that return value.
-    local createdIndex = GetMacroIndexByName(macroName)
-    if IsOurMacro(createdIndex) then
-        launcherButton:Hide()
-        Print(
-            "created the |cffffffff"
-                .. macroName
-                .. "|r macro. Open |cffffffff/macro|r and drag it onto an action bar."
-        )
-        return true
-    end
-
-    Print("could not create the launcher macro. Type |cffffffff/ehp macro|r to try again.")
-    Print("You can also create it manually with this one line: |cffffffff/ehp|r")
-    launcherButton:Show()
-    return false
-end
-
-local function ScheduleLauncherMacro()
-    if macroCreationScheduled then
-        return
-    end
-
-    macroCreationScheduled = true
-    local elapsed = 0
-    macroDelayFrame:SetScript("OnUpdate", function(self, timeSinceLastUpdate)
-        elapsed = elapsed + timeSinceLastUpdate
-        if elapsed < 4 then
-            return
-        end
-
-        self:SetScript("OnUpdate", nil)
-        CreateLauncherMacro(false)
-    end)
-end
-
 local function PrintDiagnostics()
     Print("version " .. ADDON_VERSION .. ".")
     Print(
@@ -936,20 +929,6 @@ local function PrintDiagnostics()
         end
     end
 
-    if type(GetNumMacros) == "function" and type(GetMacroIndexByName) == "function" then
-        local accountCount, characterCount = GetNumMacros()
-        Print(
-            "macros: "
-                .. (accountCount or 0)
-                .. " account, "
-                .. (characterCount or 0)
-                .. " character; Professions index "
-                .. (GetMacroIndexByName(MACRO_NAME) or 0)
-                .. "."
-        )
-    else
-        Print("macro APIs are unavailable.")
-    end
 end
 
 local function HandleSlashCommand(input)
@@ -965,12 +944,6 @@ local function HandleSlashCommand(input)
         if not InCombatLockdown() then
             panel:Hide()
         end
-    elseif command == "macro" then
-        if InCombatLockdown() then
-            Print("macros cannot be created during combat.")
-        else
-            CreateLauncherMacro(true)
-        end
     elseif command == "refresh" then
         if EbonholdProfessions_SafeRefresh(true) then
             Print("profession list refreshed.")
@@ -981,17 +954,26 @@ local function HandleSlashCommand(input)
     elseif command == "button" then
         if launcherButton:IsShown() then
             launcherButton:Hide()
+            EbonholdProfessionsDB.floatingButtonShown = false
         else
             launcherButton:Show()
+            EbonholdProfessionsDB.floatingButtonShown = true
+        end
+    elseif command == "minimap" then
+        if minimapButton:IsShown() then
+            minimapButton:Hide()
+            EbonholdProfessionsDB.minimapButtonShown = false
+        else
+            minimapButton:Show()
+            EbonholdProfessionsDB.minimapButtonShown = true
         end
     else
-        Print("commands: /ehp, /ehp macro, /ehp refresh, /ehp debug, /ehp button")
+        Print("commands: /ehp, /ehp refresh, /ehp debug, /ehp button, /ehp minimap")
     end
 end
 
 eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
-eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 eventFrame:RegisterEvent("SKILL_LINES_CHANGED")
 eventFrame:RegisterEvent("SPELLS_CHANGED")
@@ -1004,19 +986,22 @@ eventFrame:SetScript("OnEvent", function(self, event, argument)
         if type(EbonholdProfessionsDB) ~= "table" then
             EbonholdProfessionsDB = {}
         end
+        if EbonholdProfessionsDB.floatingButtonShown == nil then
+            EbonholdProfessionsDB.floatingButtonShown = true
+        end
+        if EbonholdProfessionsDB.minimapButtonShown == nil then
+            EbonholdProfessionsDB.minimapButtonShown = true
+        end
 
         CreatePanel()
         CreateLauncherButton()
+        CreateMinimapButton()
 
         SLASH_EBONHOLDPROFESSIONS1 = "/ehp"
         SLASH_EBONHOLDPROFESSIONS2 = "/professions"
         SlashCmdList.EBONHOLDPROFESSIONS = HandleSlashCommand
     elseif event == "PLAYER_LOGIN" then
         EbonholdProfessions_SafeRefresh(false)
-    elseif event == "PLAYER_ENTERING_WORLD" then
-        -- Ebonhold synchronizes some character data after entering the world.
-        -- Waiting avoids creating a macro just before that sync overwrites it.
-        ScheduleLauncherMacro()
     elseif event == "PLAYER_REGEN_ENABLED" then
         if refreshPending then
             EbonholdProfessions_SafeRefresh(false)
