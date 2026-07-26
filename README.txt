@@ -1,4 +1,4 @@
-EBONHOLD PROFESSIONS 1.5.0
+EBONHOLD PROFESSIONS 1.6.0
 ====================
 
 For the Wrath of the Lich King 3.3.5 client used by Project Ebonhold.
@@ -45,13 +45,32 @@ Right-click any clickable profession or utility in the profession window and
 choose "Assign hotkey", then press the desired key. Modifier combinations such
 as Ctrl-P, Shift-P, and Alt-P are supported.
 
-The assigned key works while the profession window is closed. For example,
-assigning P to Prospecting immediately activates Prospecting when P is pressed,
-ready for an ore stack to be selected.
+The assigned key works while the profession window is closed. Without an
+allowed item available, assigning P to Prospecting activates Prospecting and
+leaves it ready for an ore stack to be selected. With an allowed ore available,
+the same key press also targets that stack automatically.
 
 Right-click the entry and choose "Reset hotkey to default" to remove its
 override and restore the key's normal WoW behavior. Escape cancels assignment;
 Backspace or Delete clears the selected entry's hotkey.
+
+ALLOWED ITEM LISTS
+------------------
+Prospecting, Milling, and Disenchant each have an editable allowed-item list.
+
+1. Right-click Prospecting, Milling, or Disenchant in the profession window.
+2. Choose "Edit allowed items".
+3. Open a bag and drag an item into the blue drop area.
+4. Right-click an item in the list to remove it, or use "Clear List".
+
+When at least one allowed item is available in the bags, clicking that utility
+or pressing its assigned hotkey casts the profession ability and targets the
+next eligible stack in one secure action. Prospecting and Milling require a
+stack of at least 5; Disenchant requires one item.
+
+WoW requires one physical key press for each operation. The add-on will never
+loop or process items unattended. Repeatedly press the assigned hotkey to work
+through the allowed bag items without opening the bags again.
 
 COMMANDS
 --------
