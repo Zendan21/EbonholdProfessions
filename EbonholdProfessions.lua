@@ -1,6 +1,6 @@
 local addonName = ...
 
-local ADDON_VERSION = "1.2.0"
+local ADDON_VERSION = "1.5.0"
 local PREFIX = "|cff58c6ffEbonhold Professions:|r "
 local PANEL_WIDTH = 500
 local PANEL_PADDING = 16
@@ -120,8 +120,15 @@ local eventFrame = CreateFrame("Frame")
 local panel
 local launcherButton
 local minimapButton
+local contextMenuFrame
 local professionButtons = {}
+local hotkeyButtons = {}
+local hotkeyTargets = {}
 local refreshPending
+local hotkeyBindingsPending
+local hotkeyCaptureButton
+local OpenProfessionMenu
+local EndHotkeyCapture
 local lastScanDetails = {
     skillCount = 0,
     spellCount = 0,
@@ -471,6 +478,13 @@ local function ProfessionButton_OnEnter(self)
         )
     end
 
+    if self.actionName then
+        if self.hotkey then
+            GameTooltip:AddLine("Hotkey: " .. self.hotkey, 1, 0.82, 0)
+        end
+        GameTooltip:AddLine("Right-click: hotkey options", 0.65, 0.7, 0.78)
+    end
+
     GameTooltip:Show()
 end
 
@@ -496,7 +510,7 @@ local function CreateProfessionButton(index)
         insets = { left = 3, right = 3, top = 3, bottom = 3 },
     })
     SetButtonBackdrop(button, 0.055, 0.065, 0.085, 0.98)
-    button:RegisterForClicks("LeftButtonUp")
+    button:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 
     button.icon = button:CreateTexture(nil, "ARTWORK")
     button.icon:SetWidth(38)
@@ -512,7 +526,7 @@ local function CreateProfessionButton(index)
 
     button.nameText = button:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     button.nameText:SetPoint("TOPLEFT", button.icon, "TOPRIGHT", 10, -4)
-    button.nameText:SetPoint("RIGHT", button, "RIGHT", -8, 0)
+    button.nameText:SetPoint("RIGHT", button, "RIGHT", -66, 0)
     button.nameText:SetJustifyH("LEFT")
 
     button.rankLabel = button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -521,6 +535,12 @@ local function CreateProfessionButton(index)
     button.rankLabel:SetJustifyH("LEFT")
     button.rankLabel:SetTextColor(0.68, 0.72, 0.78)
 
+    button.hotkeyLabel = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    button.hotkeyLabel:SetPoint("TOPRIGHT", button, "TOPRIGHT", -9, -9)
+    button.hotkeyLabel:SetWidth(58)
+    button.hotkeyLabel:SetJustifyH("RIGHT")
+    button.hotkeyLabel:SetTextColor(0.35, 0.85, 1)
+
     button:SetHighlightTexture("Interface\\Buttons\\UI-Listbox-Highlight2")
     local highlight = button:GetHighlightTexture()
     highlight:SetBlendMode("ADD")
@@ -528,6 +548,11 @@ local function CreateProfessionButton(index)
 
     button:SetScript("OnEnter", ProfessionButton_OnEnter)
     button:SetScript("OnLeave", ProfessionButton_OnLeave)
+    button:SetScript("OnClick", function(self, mouseButton)
+        if mouseButton == "RightButton" and OpenProfessionMenu then
+            OpenProfessionMenu(self)
+        end
+    end)
 
     return button
 end
@@ -611,6 +636,78 @@ local function CreatePanel()
             EbonholdProfessions_SafeRefresh(false)
         end
     end)
+    panel:SetScript("OnHide", function()
+        if EndHotkeyCapture then
+            EndHotkeyCapture()
+        end
+    end)
+end
+
+local function OpenLauncherMenu(buttonType)
+    GameTooltip:Hide()
+
+    local isFloating = buttonType == "floating"
+    local button = isFloating and launcherButton or minimapButton
+    local lockKey = isFloating and "floatingButtonLocked" or "minimapButtonLocked"
+    local shownKey = isFloating and "floatingButtonShown" or "minimapButtonShown"
+    local opacityKey = isFloating and "floatingButtonOpacity" or "minimapButtonOpacity"
+    local buttonLabel = isFloating and "floating button" or "minimap button"
+    local isLocked = EbonholdProfessionsDB[lockKey]
+    local currentOpacity = EbonholdProfessionsDB[opacityKey] or 100
+
+    if not contextMenuFrame then
+        contextMenuFrame = CreateFrame(
+            "Frame",
+            addonName .. "ContextMenu",
+            UIParent,
+            "UIDropDownMenuTemplate"
+        )
+    end
+
+    local opacityMenu = {}
+    for percent = 10, 100, 10 do
+        local opacity = percent
+        table.insert(opacityMenu, {
+            text = opacity .. "%",
+            checked = currentOpacity == opacity,
+            func = function()
+                EbonholdProfessionsDB[opacityKey] = opacity
+                button:SetAlpha(opacity / 100)
+            end,
+        })
+    end
+
+    local menu = {
+        {
+            text = "Ebonhold Professions",
+            isTitle = true,
+            notCheckable = true,
+        },
+        {
+            text = isLocked and "Unlock position" or "Lock position",
+            notCheckable = true,
+            func = function()
+                EbonholdProfessionsDB[lockKey] = not isLocked
+            end,
+        },
+        {
+            text = "Opacity: " .. currentOpacity .. "%",
+            hasArrow = true,
+            notCheckable = true,
+            menuList = opacityMenu,
+        },
+        {
+            text = "Hide " .. buttonLabel,
+            notCheckable = true,
+            func = function()
+                GameTooltip:Hide()
+                button:Hide()
+                EbonholdProfessionsDB[shownKey] = false
+            end,
+        },
+    }
+
+    EasyMenu(menu, contextMenuFrame, "cursor", 0, 0, "MENU")
 end
 
 local function SaveLauncherPosition()
@@ -630,7 +727,7 @@ local function CreateLauncherButton()
     launcherButton:SetFrameStrata("HIGH")
     launcherButton:SetClampedToScreen(true)
     launcherButton:SetMovable(true)
-    launcherButton:RegisterForClicks("LeftButtonUp")
+    launcherButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     launcherButton:RegisterForDrag("RightButton")
 
     local position = EbonholdProfessionsDB.launcherPosition
@@ -660,26 +757,55 @@ local function CreateLauncherButton()
     launcherButton:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square")
     launcherButton:SetPushedTexture("Interface\\Buttons\\UI-Quickslot-Depress")
 
-    launcherButton:SetScript("OnClick", function()
-        EbonholdProfessions_Toggle()
+    launcherButton:SetScript("OnClick", function(self, mouseButton)
+        if self.ignoreClick then
+            return
+        end
+
+        if mouseButton == "RightButton" then
+            OpenLauncherMenu("floating")
+        else
+            EbonholdProfessions_Toggle()
+        end
     end)
     launcherButton:SetScript("OnDragStart", function(self)
-        if not InCombatLockdown() then
+        if not EbonholdProfessionsDB.floatingButtonLocked
+            and not InCombatLockdown()
+        then
+            self.isMoving = true
             self:StartMoving()
         end
     end)
     launcherButton:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
-        SaveLauncherPosition()
+        if self.isMoving then
+            self.isMoving = nil
+            self:StopMovingOrSizing()
+            SaveLauncherPosition()
+            self.ignoreClick = true
+            self:SetScript("OnUpdate", function(button)
+                button.ignoreClick = nil
+                button:SetScript("OnUpdate", nil)
+            end)
+        end
     end)
     launcherButton:SetScript("OnEnter", function(self)
+        self:SetAlpha(1)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:SetText("Ebonhold Professions", 1, 0.82, 0)
         GameTooltip:AddLine("Left-click: open professions", 1, 1, 1)
-        GameTooltip:AddLine("Right-drag: move this button", 0.65, 0.7, 0.78)
+        GameTooltip:AddLine("Right-click: options", 1, 1, 1)
+        if EbonholdProfessionsDB.floatingButtonLocked then
+            GameTooltip:AddLine("Position locked", 0.65, 0.7, 0.78)
+        else
+            GameTooltip:AddLine("Right-drag: move", 0.65, 0.7, 0.78)
+        end
         GameTooltip:Show()
     end)
-    launcherButton:SetScript("OnLeave", ProfessionButton_OnLeave)
+    launcherButton:SetScript("OnLeave", function(self)
+        GameTooltip:Hide()
+        self:SetAlpha((EbonholdProfessionsDB.floatingButtonOpacity or 100) / 100)
+    end)
+    launcherButton:SetAlpha(EbonholdProfessionsDB.floatingButtonOpacity / 100)
 
     if EbonholdProfessionsDB.floatingButtonShown then
         launcherButton:Show()
@@ -722,7 +848,7 @@ local function CreateMinimapButton()
     minimapButton:SetHeight(32)
     minimapButton:SetFrameStrata("MEDIUM")
     minimapButton:SetFrameLevel(Minimap:GetFrameLevel() + 8)
-    minimapButton:RegisterForClicks("LeftButtonUp")
+    minimapButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     minimapButton:RegisterForDrag("RightButton")
 
     SetMinimapButtonPosition(
@@ -756,29 +882,299 @@ local function CreateMinimapButton()
     minimapButton.highlight:SetTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
     minimapButton.highlight:SetBlendMode("ADD")
 
-    minimapButton:SetScript("OnClick", function()
-        EbonholdProfessions_Toggle()
+    minimapButton:SetScript("OnClick", function(self, mouseButton)
+        if self.ignoreClick then
+            return
+        end
+
+        if mouseButton == "RightButton" then
+            OpenLauncherMenu("minimap")
+        else
+            EbonholdProfessions_Toggle()
+        end
     end)
     minimapButton:SetScript("OnDragStart", function(self)
-        self:SetScript("OnUpdate", UpdateMinimapButtonPosition)
+        if not EbonholdProfessionsDB.minimapButtonLocked then
+            self.isMoving = true
+            self:SetScript("OnUpdate", UpdateMinimapButtonPosition)
+        end
     end)
     minimapButton:SetScript("OnDragStop", function(self)
-        self:SetScript("OnUpdate", nil)
-        UpdateMinimapButtonPosition()
+        if self.isMoving then
+            self.isMoving = nil
+            self:SetScript("OnUpdate", nil)
+            UpdateMinimapButtonPosition()
+            self.ignoreClick = true
+            self:SetScript("OnUpdate", function(button)
+                button.ignoreClick = nil
+                button:SetScript("OnUpdate", nil)
+            end)
+        end
     end)
     minimapButton:SetScript("OnEnter", function(self)
+        self:SetAlpha(1)
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
         GameTooltip:SetText("Ebonhold Professions", 1, 0.82, 0)
         GameTooltip:AddLine("Left-click: open professions", 1, 1, 1)
-        GameTooltip:AddLine("Right-drag: move around the minimap", 0.65, 0.7, 0.78)
+        GameTooltip:AddLine("Right-click: options", 1, 1, 1)
+        if EbonholdProfessionsDB.minimapButtonLocked then
+            GameTooltip:AddLine("Position locked", 0.65, 0.7, 0.78)
+        else
+            GameTooltip:AddLine("Right-drag: move around the minimap", 0.65, 0.7, 0.78)
+        end
         GameTooltip:Show()
     end)
-    minimapButton:SetScript("OnLeave", ProfessionButton_OnLeave)
+    minimapButton:SetScript("OnLeave", function(self)
+        GameTooltip:Hide()
+        self:SetAlpha((EbonholdProfessionsDB.minimapButtonOpacity or 100) / 100)
+    end)
+    minimapButton:SetAlpha(EbonholdProfessionsDB.minimapButtonOpacity / 100)
 
     if EbonholdProfessionsDB.minimapButtonShown then
         minimapButton:Show()
     else
         minimapButton:Hide()
+    end
+end
+
+local function RefreshHotkeyLabels()
+    for _, button in ipairs(professionButtons) do
+        if button == hotkeyCaptureButton then
+            button.hotkeyLabel:SetText("PRESS KEY")
+            button.hotkey = nil
+        elseif button.entryKey then
+            local hotkey = EbonholdProfessionsDB.hotkeys[button.entryKey]
+            button.hotkey = hotkey
+            button.hotkeyLabel:SetText(hotkey or "")
+        else
+            button.hotkey = nil
+            button.hotkeyLabel:SetText("")
+        end
+    end
+end
+
+local function ApplyHotkeyBindings()
+    if InCombatLockdown() then
+        hotkeyBindingsPending = true
+        return false
+    end
+
+    if type(ClearOverrideBindings) ~= "function"
+        or type(SetOverrideBindingClick) ~= "function"
+    then
+        return false
+    end
+
+    local clearOK = pcall(ClearOverrideBindings, eventFrame)
+    if not clearOK then
+        return false
+    end
+
+    local allApplied = true
+    for entryKey, hotkey in pairs(EbonholdProfessionsDB.hotkeys) do
+        local target = hotkeyTargets[entryKey]
+        if target and hotkey and hotkey ~= "" then
+            local bindOK = pcall(
+                SetOverrideBindingClick,
+                eventFrame,
+                true,
+                hotkey,
+                target:GetName(),
+                "LeftButton"
+            )
+            if not bindOK then
+                allApplied = false
+            end
+        end
+    end
+
+    hotkeyBindingsPending = nil
+    return allApplied
+end
+
+local modifierKeys = {
+    LSHIFT = true,
+    RSHIFT = true,
+    LCTRL = true,
+    RCTRL = true,
+    LALT = true,
+    RALT = true,
+}
+
+local function BuildHotkey(key)
+    if not key or key == "UNKNOWN" or modifierKeys[key] then
+        return nil
+    end
+
+    local parts = {}
+    if IsControlKeyDown() then
+        table.insert(parts, "CTRL")
+    end
+    if IsShiftKeyDown() then
+        table.insert(parts, "SHIFT")
+    end
+    if IsAltKeyDown() then
+        table.insert(parts, "ALT")
+    end
+    table.insert(parts, key)
+    return table.concat(parts, "-")
+end
+
+EndHotkeyCapture = function()
+    if not hotkeyCaptureButton then
+        return
+    end
+
+    eventFrame:EnableKeyboard(false)
+    eventFrame:SetScript("OnKeyDown", nil)
+    hotkeyCaptureButton = nil
+    RefreshHotkeyLabels()
+end
+
+local function BeginHotkeyCapture(button)
+    if InCombatLockdown() then
+        Print("hotkeys cannot be changed during combat.")
+        return
+    end
+
+    if type(ClearOverrideBindings) ~= "function"
+        or type(SetOverrideBindingClick) ~= "function"
+    then
+        Print("this client does not support add-on override hotkeys.")
+        return
+    end
+
+    EndHotkeyCapture()
+    hotkeyCaptureButton = button
+    RefreshHotkeyLabels()
+
+    Print(
+        "press a key for |cffffffff"
+            .. button.professionName
+            .. "|r. Escape cancels; Backspace clears."
+    )
+
+    eventFrame:EnableKeyboard(true)
+    eventFrame:SetScript("OnKeyDown", function(_, key)
+        if key == "ESCAPE" then
+            EndHotkeyCapture()
+            Print("hotkey assignment cancelled.")
+            return
+        end
+
+        if key == "BACKSPACE" or key == "DELETE" then
+            EbonholdProfessionsDB.hotkeys[button.entryKey] = nil
+            ApplyHotkeyBindings()
+            EndHotkeyCapture()
+            Print("hotkey reset for |cffffffff" .. button.professionName .. "|r.")
+            return
+        end
+
+        local hotkey = BuildHotkey(key)
+        if not hotkey then
+            return
+        end
+
+        for entryKey, assignedKey in pairs(EbonholdProfessionsDB.hotkeys) do
+            if assignedKey == hotkey then
+                EbonholdProfessionsDB.hotkeys[entryKey] = nil
+            end
+        end
+
+        EbonholdProfessionsDB.hotkeys[button.entryKey] = hotkey
+        ApplyHotkeyBindings()
+        EndHotkeyCapture()
+        Print(
+            "|cffffffff"
+                .. hotkey
+                .. "|r assigned to |cffffffff"
+                .. button.professionName
+                .. "|r."
+        )
+    end)
+end
+
+OpenProfessionMenu = function(button)
+    GameTooltip:Hide()
+
+    if not contextMenuFrame then
+        contextMenuFrame = CreateFrame(
+            "Frame",
+            addonName .. "ContextMenu",
+            UIParent,
+            "UIDropDownMenuTemplate"
+        )
+    end
+
+    local hotkey = EbonholdProfessionsDB.hotkeys[button.entryKey]
+    local canAssign = button.actionName and true or false
+    local menu = {
+        {
+            text = button.professionName,
+            isTitle = true,
+            notCheckable = true,
+        },
+        {
+            text = "Current hotkey: " .. (hotkey or "None"),
+            disabled = true,
+            notCheckable = true,
+        },
+        {
+            text = "Assign hotkey",
+            disabled = not canAssign,
+            notCheckable = true,
+            func = function()
+                BeginHotkeyCapture(button)
+            end,
+        },
+        {
+            text = "Reset hotkey to default",
+            disabled = not hotkey,
+            notCheckable = true,
+            func = function()
+                if InCombatLockdown() then
+                    Print("hotkeys cannot be changed during combat.")
+                    return
+                end
+
+                EbonholdProfessionsDB.hotkeys[button.entryKey] = nil
+                ApplyHotkeyBindings()
+                RefreshHotkeyLabels()
+                Print("hotkey reset for |cffffffff" .. button.professionName .. "|r.")
+            end,
+        },
+    }
+
+    EasyMenu(menu, contextMenuFrame, "cursor", 0, 0, "MENU")
+end
+
+local function ConfigureHotkeyButton(index, profession)
+    local button = hotkeyButtons[index]
+    if not button then
+        button = CreateFrame(
+            "Button",
+            addonName .. "HotkeyButton" .. index,
+            UIParent,
+            "SecureActionButtonTemplate"
+        )
+        button:SetWidth(1)
+        button:SetHeight(1)
+        button:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 1, 1)
+        button:SetAlpha(0)
+        button:EnableMouse(false)
+        button:RegisterForClicks("LeftButtonUp")
+        hotkeyButtons[index] = button
+    end
+
+    if profession.actionName then
+        button:SetAttribute("type1", "spell")
+        button:SetAttribute("spell1", profession.actionName)
+        button:Show()
+        hotkeyTargets[profession.key] = button
+    else
+        button:SetAttribute("type1", nil)
+        button:SetAttribute("spell1", nil)
+        button:Hide()
     end
 end
 
@@ -789,6 +1185,7 @@ function EbonholdProfessions_Refresh()
     end
 
     local known = FindKnownProfessions()
+    hotkeyTargets = {}
     local rows = math.max(1, math.ceil(#known / COLUMNS))
     local contentTop = 66
     local contentHeight = rows * BUTTON_HEIGHT + (rows - 1) * BUTTON_GAP
@@ -818,34 +1215,46 @@ function EbonholdProfessions_Refresh()
         end
 
         button.professionName = profession.name
+        button.entryKey = profession.key
         button.rankText = profession.detailText or rankText
         button.actionName = profession.actionName
         button.isUtility = profession.isUtility
+        button.hotkey = EbonholdProfessionsDB.hotkeys[profession.key]
         button.icon:SetTexture(profession.texture)
         button.nameText:SetText(profession.name)
+        button.hotkeyLabel:SetText(button.hotkey or "")
         button.rankLabel:SetText(
             profession.detailText or (rankText ~= "" and rankText or "Known")
         )
 
         if profession.actionName then
-            button:SetAttribute("type", "spell")
-            button:SetAttribute("spell", profession.actionName)
+            button:SetAttribute("type1", "spell")
+            button:SetAttribute("spell1", profession.actionName)
             button.icon:SetVertexColor(1, 1, 1)
             button.nameText:SetTextColor(1, 0.82, 0)
             SetButtonBackdrop(button, 0.055, 0.065, 0.085, 0.98)
         else
-            button:SetAttribute("type", nil)
-            button:SetAttribute("spell", nil)
+            button:SetAttribute("type1", nil)
+            button:SetAttribute("spell1", nil)
             button.icon:SetVertexColor(0.45, 0.45, 0.45)
             button.nameText:SetTextColor(0.72, 0.72, 0.72)
             SetButtonBackdrop(button, 0.045, 0.05, 0.06, 0.9)
         end
 
         button:Show()
+        ConfigureHotkeyButton(index, profession)
     end
 
     for index = #known + 1, #professionButtons do
+        professionButtons[index].entryKey = nil
+        professionButtons[index].hotkey = nil
+        professionButtons[index].hotkeyLabel:SetText("")
         professionButtons[index]:Hide()
+    end
+    for index = #known + 1, #hotkeyButtons do
+        hotkeyButtons[index]:SetAttribute("type1", nil)
+        hotkeyButtons[index]:SetAttribute("spell1", nil)
+        hotkeyButtons[index]:Hide()
     end
 
     if #known == 0 then
@@ -860,6 +1269,7 @@ function EbonholdProfessions_Refresh()
                 .. " utilities  -  drag the background"
         )
     end
+    ApplyHotkeyBindings()
     refreshPending = nil
 end
 
@@ -929,6 +1339,22 @@ local function PrintDiagnostics()
         end
     end
 
+    local assignedHotkeys = 0
+    for _ in pairs(EbonholdProfessionsDB.hotkeys) do
+        assignedHotkeys = assignedHotkeys + 1
+    end
+    Print(
+        "hotkeys: "
+            .. assignedHotkeys
+            .. " assigned; override API "
+            .. (
+                type(SetOverrideBindingClick) == "function"
+                    and type(ClearOverrideBindings) == "function"
+                    and "available."
+                or "unavailable."
+            )
+    )
+
 end
 
 local function HandleSlashCommand(input)
@@ -992,6 +1418,21 @@ eventFrame:SetScript("OnEvent", function(self, event, argument)
         if EbonholdProfessionsDB.minimapButtonShown == nil then
             EbonholdProfessionsDB.minimapButtonShown = true
         end
+        if EbonholdProfessionsDB.floatingButtonLocked == nil then
+            EbonholdProfessionsDB.floatingButtonLocked = false
+        end
+        if EbonholdProfessionsDB.minimapButtonLocked == nil then
+            EbonholdProfessionsDB.minimapButtonLocked = false
+        end
+        if EbonholdProfessionsDB.floatingButtonOpacity == nil then
+            EbonholdProfessionsDB.floatingButtonOpacity = 100
+        end
+        if EbonholdProfessionsDB.minimapButtonOpacity == nil then
+            EbonholdProfessionsDB.minimapButtonOpacity = 100
+        end
+        if type(EbonholdProfessionsDB.hotkeys) ~= "table" then
+            EbonholdProfessionsDB.hotkeys = {}
+        end
 
         CreatePanel()
         CreateLauncherButton()
@@ -1005,12 +1446,14 @@ eventFrame:SetScript("OnEvent", function(self, event, argument)
     elseif event == "PLAYER_REGEN_ENABLED" then
         if refreshPending then
             EbonholdProfessions_SafeRefresh(false)
+        elseif hotkeyBindingsPending then
+            ApplyHotkeyBindings()
         end
     elseif event == "SKILL_LINES_CHANGED" or event == "SPELLS_CHANGED" then
-        if panel and panel:IsShown() then
-            EbonholdProfessions_SafeRefresh(false)
-        else
+        if InCombatLockdown() then
             refreshPending = true
+        else
+            EbonholdProfessions_SafeRefresh(false)
         end
     end
 end)
