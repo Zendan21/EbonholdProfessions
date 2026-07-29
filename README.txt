@@ -68,10 +68,6 @@ or pressing its assigned hotkey casts the profession ability and targets the
 next eligible stack in one secure action. Prospecting and Milling require a
 stack of at least 5; Disenchant requires one item.
 
-WoW requires one physical key press for each operation. The add-on will never
-loop or process items unattended. Repeatedly press the assigned hotkey to work
-through the allowed bag items without opening the bags again.
-
 COMMANDS
 --------
 /ehp             Toggle the profession window
