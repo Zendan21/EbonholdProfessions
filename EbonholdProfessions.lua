@@ -1,6 +1,6 @@
 local addonName = ...
 
-local ADDON_VERSION = "1.10.1"
+local ADDON_VERSION = "1.10.2"
 local PREFIX = "|cff58c6ffEbonhold Professions:|r "
 local PANEL_WIDTH = 500
 local MIN_PANEL_WIDTH = 380
@@ -992,7 +992,9 @@ local function CreateSettingsFrame()
     settingsFrame:SetWidth(440)
     settingsFrame:SetHeight(255)
     settingsFrame:SetPoint("CENTER", UIParent, "CENTER", 250, 35)
-    settingsFrame:SetFrameStrata("DIALOG")
+    -- Secondary windows must sit above every child of the main DIALOG frame,
+    -- including its secure profession buttons.
+    settingsFrame:SetFrameStrata("FULLSCREEN_DIALOG")
     settingsFrame:SetClampedToScreen(true)
     settingsFrame:SetMovable(true)
     settingsFrame:EnableMouse(true)
@@ -1956,7 +1958,10 @@ local function CreateItemListPanel()
     itemListPanel:SetWidth(390)
     itemListPanel:SetHeight(470)
     itemListPanel:SetPoint("CENTER", UIParent, "CENTER", 270, 20)
-    itemListPanel:SetFrameStrata("DIALOG")
+    -- The main profession buttons have their own frame levels. Keeping this
+    -- editor on DIALOG can interleave them with the editor, so use WoW's
+    -- dedicated modal-dialog stratum for the complete window.
+    itemListPanel:SetFrameStrata("FULLSCREEN_DIALOG")
     itemListPanel:SetClampedToScreen(true)
     itemListPanel:SetMovable(true)
     itemListPanel:EnableMouse(true)

@@ -2,7 +2,7 @@
 ## Title: Ebonhold Professions
 ## Notes: Opens every learned profession from one compact window.
 ## Author: Zendan
-## Version: 1.10.1
+## Version: 1.10.2
 ## SavedVariables: EbonholdProfessionsDB
 
 EbonholdProfessions.lua
