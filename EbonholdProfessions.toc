@@ -1,8 +1,8 @@
 ## Interface: 30300
 ## Title: Ebonhold Professions
 ## Notes: Opens every learned profession from one compact window.
-## Author: Zendan21
-## Version: 1.6.2
+## Author: Zendan
+## Version: 1.10.1
 ## SavedVariables: EbonholdProfessionsDB
 
 EbonholdProfessions.lua

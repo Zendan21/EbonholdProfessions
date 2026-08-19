@@ -1,15 +1,53 @@
 local addonName = ...
 
-local ADDON_VERSION = "1.6.2"
+local ADDON_VERSION = "1.10.1"
 local PREFIX = "|cff58c6ffEbonhold Professions:|r "
 local PANEL_WIDTH = 500
-local PANEL_PADDING = 16
-local BUTTON_WIDTH = 226
+local MIN_PANEL_WIDTH = 380
+local MIN_PANEL_HEIGHT = 260
 local BUTTON_HEIGHT = 52
 local BUTTON_GAP = 8
-local COLUMNS = 2
+local SECTION_HEADER_HEIGHT = 20
+local SECTION_HEADER_GAP = 6
+local SECTION_GAP = 10
+local SECTION_COLUMN_GAP = 12
+local WIDE_SECTION_THRESHOLD = 760
+local TWO_BUTTON_COLUMN_WIDTH = 460
 local LAUNCHER_ICON = "Interface\\Icons\\INV_Misc_Book_09"
 local SPELL_BOOK_TYPE = BOOKTYPE_SPELL or "spell"
+
+-- Shared visual language with Ravioli Family Activity Finder.
+local COLORS = {
+    background = { 0.035, 0.043, 0.055, 0.98 },
+    panel = { 0.065, 0.075, 0.095, 0.98 },
+    panelLight = { 0.090, 0.102, 0.125, 1 },
+    border = { 0.22, 0.25, 0.30, 1 },
+    gold = { 0.86, 0.64, 0.25, 1 },
+    text = { 0.92, 0.92, 0.92, 1 },
+    muted = { 0.58, 0.62, 0.68, 1 },
+    green = { 0.35, 0.78, 0.48, 1 },
+    red = { 0.88, 0.32, 0.30, 1 },
+}
+
+local sectionDefinitions = {
+    { key = "MAIN", label = "Main Professions" },
+    { key = "SUB", label = "Sub Professions" },
+    { key = "TRACKING", label = "Tracking" },
+    { key = "ABILITY", label = "Ability Types" },
+}
+
+local sectionOrder = {
+    MAIN = 1,
+    SUB = 2,
+    TRACKING = 3,
+    ABILITY = 4,
+}
+
+local subProfessionKeys = {
+    COOKING = true,
+    FISHING = true,
+    FIRST_AID = true,
+}
 
 -- skillSpellID supplies the localized profession name. actionSpellID is the
 -- spell which opens that profession (or performs its active gathering action).
@@ -27,7 +65,11 @@ local professionDefinitions = {
         key = "COOKING", skillSpellID = 2550, actionSpellID = 2550,
         rankSpellIDs = { 2550, 3102, 3413, 18260, 33359, 51296 },
         extraAbilities = {
-            { spellID = 818, fallbackName = "Basic Campfire" },
+            {
+                spellID = 818,
+                fallbackName = "Basic Campfire",
+                section = "ABILITY",
+            },
         },
     },
     {
@@ -37,7 +79,9 @@ local professionDefinitions = {
             {
                 spellID = 13262,
                 fallbackName = "Disenchant",
+                section = "ABILITY",
                 itemProcessor = true,
+                processorType = "DISENCHANT",
                 minimumCount = 1,
             },
         },
@@ -54,14 +98,22 @@ local professionDefinitions = {
         key = "FISHING", skillSpellID = 7620, actionSpellID = 7620,
         rankSpellIDs = { 7620, 7731, 7732, 18248, 33095, 51294 },
         extraAbilities = {
-            { spellID = 43308, fallbackName = "Find Fish" },
+            {
+                spellID = 43308,
+                fallbackName = "Find Fish",
+                section = "TRACKING",
+            },
         },
     },
     {
         key = "HERBALISM", skillSpellID = 2366, actionSpellID = nil,
         rankSpellIDs = { 2366, 2368, 3570, 11993, 28695, 50300 },
         extraAbilities = {
-            { spellID = 2383, fallbackName = "Find Herbs" },
+            {
+                spellID = 2383,
+                fallbackName = "Find Herbs",
+                section = "TRACKING",
+            },
         },
     },
     {
@@ -71,7 +123,9 @@ local professionDefinitions = {
             {
                 spellID = 51005,
                 fallbackName = "Milling",
+                section = "ABILITY",
                 itemProcessor = true,
+                processorType = "MILLING",
                 minimumCount = 5,
             },
         },
@@ -83,7 +137,9 @@ local professionDefinitions = {
             {
                 spellID = 31252,
                 fallbackName = "Prospecting",
+                section = "ABILITY",
                 itemProcessor = true,
+                processorType = "PROSPECTING",
                 minimumCount = 5,
             },
         },
@@ -96,7 +152,11 @@ local professionDefinitions = {
         key = "MINING", skillSpellID = 2575, actionSpellID = 2656,
         rankSpellIDs = { 2575, 2576, 3564, 10248, 29354, 50310 },
         extraAbilities = {
-            { spellID = 2580, fallbackName = "Find Minerals" },
+            {
+                spellID = 2580,
+                fallbackName = "Find Minerals",
+                section = "TRACKING",
+            },
         },
     },
     {
@@ -137,8 +197,12 @@ local launcherButton
 local minimapButton
 local contextMenuFrame
 local itemListPanel
+local settingsFrame
 local itemListRows = {}
+local itemScanTooltip
+local processabilityCache = {}
 local professionButtons = {}
+local sectionHeaders = {}
 local hotkeyButtons = {}
 local hotkeyTargets = {}
 local refreshPending
@@ -148,6 +212,7 @@ local hotkeyCaptureButton
 local OpenProfessionMenu
 local EndHotkeyCapture
 local OpenItemListEditor
+local OpenSettingsFrame
 local RefreshProcessingActions
 local lastScanDetails = {
     skillCount = 0,
@@ -167,6 +232,76 @@ end
 
 local function Trim(value)
     return (value or ""):match("^%s*(.-)%s*$")
+end
+
+local function AddBackground(frame, color, borderColor)
+    frame:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8X8",
+        edgeFile = "Interface\\Buttons\\WHITE8X8",
+        tile = false,
+        edgeSize = 1,
+        insets = { left = 1, right = 1, top = 1, bottom = 1 },
+    })
+    frame:SetBackdropColor(color[1], color[2], color[3], color[4] or 1)
+    borderColor = borderColor or COLORS.border
+    frame:SetBackdropBorderColor(
+        borderColor[1],
+        borderColor[2],
+        borderColor[3],
+        borderColor[4] or 1
+    )
+end
+
+local function CreateText(parent, text, size, color, justify)
+    local label = parent:CreateFontString(nil, "OVERLAY")
+    label:SetFont("Fonts\\FRIZQT__.TTF", size or 12)
+    label:SetText(text or "")
+    color = color or COLORS.text
+    label:SetTextColor(color[1], color[2], color[3], color[4] or 1)
+    label:SetJustifyH(justify or "LEFT")
+    label:SetJustifyV("MIDDLE")
+    return label
+end
+
+local function CreateButton(parent, text, width, height)
+    local button = CreateFrame("Button", nil, parent)
+    button:SetWidth(width)
+    button:SetHeight(height)
+    AddBackground(button, COLORS.panelLight, COLORS.border)
+    button.label = CreateText(button, text, 11, COLORS.text, "CENTER")
+    button.label:SetAllPoints()
+    button:SetScript("OnEnter", function(self)
+        self:SetBackdropColor(0.14, 0.16, 0.20, 1)
+        self:SetBackdropBorderColor(
+            COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 0.8
+        )
+    end)
+    button:SetScript("OnLeave", function(self)
+        self:SetBackdropColor(
+            COLORS.panelLight[1],
+            COLORS.panelLight[2],
+            COLORS.panelLight[3],
+            COLORS.panelLight[4]
+        )
+        self:SetBackdropBorderColor(
+            COLORS.border[1], COLORS.border[2], COLORS.border[3], COLORS.border[4]
+        )
+    end)
+    button:SetScript("OnMouseDown", function(self)
+        self.label:ClearAllPoints()
+        self.label:SetPoint("CENTER", 1, -1)
+    end)
+    button:SetScript("OnMouseUp", function(self)
+        self.label:ClearAllPoints()
+        self.label:SetAllPoints()
+    end)
+    return button
+end
+
+local function IsAutomaticProcessingEnabled()
+    return EbonholdProfessionsDB
+        and EbonholdProfessionsDB.settings
+        and EbonholdProfessionsDB.settings.autoProcessItems ~= false
 end
 
 local function GetProfessionName(definition)
@@ -430,7 +565,8 @@ local function FindKnownProfessions()
                 maxRank = (skill and skill.maxRank) or (apiProfession and apiProfession.maxRank) or 0,
                 actionName = knownActionName,
                 texture = texture,
-                sortKey = professionName .. " 0",
+                section = subProfessionKeys[definition.key] and "SUB" or "MAIN",
+                sortKey = professionName,
             })
 
             lastScanDetails.knownCount = lastScanDetails.knownCount + 1
@@ -455,9 +591,11 @@ local function FindKnownProfessions()
                             or abilityTexture
                             or "Interface\\Icons\\INV_Misc_QuestionMark",
                         isUtility = true,
+                        section = ability.section or "ABILITY",
                         itemProcessor = ability.itemProcessor,
+                        processorType = ability.processorType,
                         minimumCount = ability.minimumCount,
-                        sortKey = professionName .. " 1 " .. abilityName,
+                        sortKey = abilityName,
                     })
                     lastScanDetails.abilityCount =
                         lastScanDetails.abilityCount + 1
@@ -467,6 +605,11 @@ local function FindKnownProfessions()
     end
 
     table.sort(known, function(left, right)
+        local leftSection = sectionOrder[left.section] or 99
+        local rightSection = sectionOrder[right.section] or 99
+        if leftSection ~= rightSection then
+            return leftSection < rightSection
+        end
         return left.sortKey < right.sortKey
     end)
 
@@ -474,13 +617,23 @@ local function FindKnownProfessions()
 end
 
 local function SetButtonBackdrop(button, red, green, blue, alpha)
+    button.baseBackdropColor = { red, green, blue, alpha }
     button:SetBackdropColor(red, green, blue, alpha)
-    button:SetBackdropBorderColor(0.22, 0.25, 0.30, 1)
+    button:SetBackdropBorderColor(
+        COLORS.border[1], COLORS.border[2], COLORS.border[3], COLORS.border[4]
+    )
 end
 
 local function ProfessionButton_OnEnter(self)
+    self:SetBackdropColor(0.14, 0.16, 0.20, 1)
+    self:SetBackdropBorderColor(
+        COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 0.8
+    )
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-    GameTooltip:SetText(self.professionName or "", 1, 0.82, 0)
+    GameTooltip:SetText(
+        self.professionName or "",
+        COLORS.gold[1], COLORS.gold[2], COLORS.gold[3]
+    )
 
     if self.rankText and self.rankText ~= "" then
         GameTooltip:AddLine(self.rankText, 1, 1, 1)
@@ -505,14 +658,30 @@ local function ProfessionButton_OnEnter(self)
             GameTooltip:AddLine("Hotkey: " .. self.hotkey, 1, 0.82, 0)
         end
         if self.itemProcessor then
-            GameTooltip:AddLine(
-                "Allowed bag items can be processed automatically.",
-                0.45,
-                0.9,
-                1,
-                true
-            )
-            GameTooltip:AddLine("Right-click: hotkey and item-list options", 0.65, 0.7, 0.78)
+            if IsAutomaticProcessingEnabled() then
+                GameTooltip:AddLine(
+                    "Automatic bag targeting: Enabled",
+                    COLORS.green[1], COLORS.green[2], COLORS.green[3],
+                    true
+                )
+                GameTooltip:AddLine(
+                    "Processes the first eligible non-blacklisted bag item.",
+                    COLORS.muted[1], COLORS.muted[2], COLORS.muted[3],
+                    true
+                )
+            else
+                GameTooltip:AddLine(
+                    "Automatic bag targeting: Disabled",
+                    COLORS.muted[1], COLORS.muted[2], COLORS.muted[3],
+                    true
+                )
+                GameTooltip:AddLine(
+                    "Click to activate the ability, then choose an item manually.",
+                    COLORS.muted[1], COLORS.muted[2], COLORS.muted[3],
+                    true
+                )
+            end
+            GameTooltip:AddLine("Right-click: hotkey and blacklist options", 0.65, 0.7, 0.78)
         else
             GameTooltip:AddLine("Right-click: hotkey options", 0.65, 0.7, 0.78)
         end
@@ -521,7 +690,13 @@ local function ProfessionButton_OnEnter(self)
     GameTooltip:Show()
 end
 
-local function ProfessionButton_OnLeave()
+local function ProfessionButton_OnLeave(self)
+    if self and self.baseBackdropColor then
+        self:SetBackdropColor(unpack(self.baseBackdropColor))
+        self:SetBackdropBorderColor(
+            COLORS.border[1], COLORS.border[2], COLORS.border[3], COLORS.border[4]
+        )
+    end
     GameTooltip:Hide()
 end
 
@@ -529,20 +704,16 @@ local function CreateProfessionButton(index)
     local button = CreateFrame(
         "Button",
         addonName .. "ProfessionButton" .. index,
-        panel,
+        panel.content,
         "SecureActionButtonTemplate"
     )
-    button:SetWidth(BUTTON_WIDTH)
+    button:SetWidth(226)
     button:SetHeight(BUTTON_HEIGHT)
-    button:SetBackdrop({
-        bgFile = "Interface\\Buttons\\WHITE8X8",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile = true,
-        tileSize = 8,
-        edgeSize = 12,
-        insets = { left = 3, right = 3, top = 3, bottom = 3 },
-    })
-    SetButtonBackdrop(button, 0.055, 0.065, 0.085, 0.98)
+    AddBackground(button, COLORS.panel, COLORS.border)
+    SetButtonBackdrop(
+        button,
+        COLORS.panel[1], COLORS.panel[2], COLORS.panel[3], COLORS.panel[4]
+    )
     -- Only left-click is registered as a secure action. Right-click is
     -- handled separately below so older 3.3.5 clients cannot confuse the
     -- context-menu click with the profession action.
@@ -560,27 +731,26 @@ local function CreateProfessionButton(index)
     button.iconBorder:SetHeight(62)
     button.iconBorder:SetPoint("CENTER", button.icon, "CENTER", 0, 0)
 
-    button.nameText = button:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    button.nameText = CreateText(button, "", 12, COLORS.text)
     button.nameText:SetPoint("TOPLEFT", button.icon, "TOPRIGHT", 10, -4)
     button.nameText:SetPoint("RIGHT", button, "RIGHT", -66, 0)
     button.nameText:SetJustifyH("LEFT")
 
-    button.rankLabel = button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    button.rankLabel = CreateText(button, "", 10, COLORS.muted)
     button.rankLabel:SetPoint("BOTTOMLEFT", button.icon, "BOTTOMRIGHT", 10, 4)
     button.rankLabel:SetPoint("RIGHT", button, "RIGHT", -8, 0)
     button.rankLabel:SetJustifyH("LEFT")
-    button.rankLabel:SetTextColor(0.68, 0.72, 0.78)
+    button.rankLabel:SetTextColor(
+        COLORS.muted[1], COLORS.muted[2], COLORS.muted[3]
+    )
 
-    button.hotkeyLabel = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    button.hotkeyLabel = CreateText(button, "", 9, COLORS.gold, "RIGHT")
     button.hotkeyLabel:SetPoint("TOPRIGHT", button, "TOPRIGHT", -9, -9)
     button.hotkeyLabel:SetWidth(58)
     button.hotkeyLabel:SetJustifyH("RIGHT")
-    button.hotkeyLabel:SetTextColor(0.35, 0.85, 1)
-
-    button:SetHighlightTexture("Interface\\Buttons\\UI-Listbox-Highlight2")
-    local highlight = button:GetHighlightTexture()
-    highlight:SetBlendMode("ADD")
-    highlight:SetAlpha(0.35)
+    button.hotkeyLabel:SetTextColor(
+        COLORS.gold[1], COLORS.gold[2], COLORS.gold[3]
+    )
 
     button:SetScript("OnEnter", ProfessionButton_OnEnter)
     button:SetScript("OnLeave", ProfessionButton_OnLeave)
@@ -595,8 +765,8 @@ end
 
 local function CreatePanel()
     panel = CreateFrame("Frame", addonName .. "Panel", UIParent)
-    panel:SetWidth(PANEL_WIDTH)
-    panel:SetHeight(150)
+    panel:SetWidth(tonumber(EbonholdProfessionsDB.panelWidth) or PANEL_WIDTH)
+    panel:SetHeight(tonumber(EbonholdProfessionsDB.panelHeight) or 150)
     if EbonholdProfessionsDB.position then
         local position = EbonholdProfessionsDB.position
         panel:SetPoint(
@@ -612,6 +782,16 @@ local function CreatePanel()
     panel:SetFrameStrata("DIALOG")
     panel:SetClampedToScreen(true)
     panel:SetMovable(true)
+    panel:SetResizable(true)
+    if panel.SetMinResize then
+        panel:SetMinResize(MIN_PANEL_WIDTH, MIN_PANEL_HEIGHT)
+    end
+    if panel.SetMaxResize then
+        panel:SetMaxResize(
+            math.max(MIN_PANEL_WIDTH, (UIParent:GetWidth() or 1024) - 40),
+            math.max(MIN_PANEL_HEIGHT, (UIParent:GetHeight() or 768) - 40)
+        )
+    end
     panel:EnableMouse(true)
     panel:RegisterForDrag("LeftButton")
     panel:SetScript("OnDragStart", function(self)
@@ -629,43 +809,112 @@ local function CreatePanel()
             y = y,
         }
     end)
-    panel:SetBackdrop({
-        bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
-        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile = true,
-        tileSize = 32,
-        edgeSize = 32,
-        insets = { left = 11, right = 12, top = 12, bottom = 11 },
-    })
+    AddBackground(panel, COLORS.background, COLORS.border)
+    table.insert(UISpecialFrames, panel:GetName())
     panel:Hide()
 
-    panel.title = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    panel.title:SetPoint("TOPLEFT", panel, "TOPLEFT", 20, -17)
+    panel.header = CreateFrame("Frame", nil, panel)
+    panel.header:SetPoint("TOPLEFT", panel, "TOPLEFT", 1, -1)
+    panel.header:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -1, -1)
+    panel.header:SetHeight(60)
+    panel.header.texture = panel.header:CreateTexture(nil, "BACKGROUND")
+    panel.header.texture:SetAllPoints()
+    panel.header.texture:SetTexture("Interface\\Buttons\\WHITE8X8")
+    panel.header.texture:SetVertexColor(0.055, 0.062, 0.078, 1)
+
+    panel.title = CreateText(panel.header, "Ebonhold Professions", 19, COLORS.text)
+    panel.title:SetPoint("TOPLEFT", panel.header, "TOPLEFT", 18, -13)
     panel.title:SetText("Ebonhold Professions")
-    panel.title:SetTextColor(1, 0.82, 0)
 
-    panel.subtitle = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    panel.subtitle = CreateText(panel.header, "", 10, COLORS.muted)
     panel.subtitle:SetPoint("TOPLEFT", panel.title, "BOTTOMLEFT", 0, -4)
-    panel.subtitle:SetText("Every profession learned by this character  |cff707780v" .. ADDON_VERSION .. "|r")
-    panel.subtitle:SetTextColor(0.65, 0.7, 0.78)
-
-    panel.closeButton = CreateFrame(
-        "Button",
-        addonName .. "CloseButton",
-        panel,
-        "UIPanelCloseButton"
+    panel.subtitle:SetText(
+        "Every profession learned by this character  |cff7c828cv"
+            .. ADDON_VERSION
+            .. "|r"
     )
-    panel.closeButton:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -5, -5)
 
-    panel.emptyText = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    panel.settingsButton = CreateButton(panel.header, "Settings", 76, 28)
+    panel.settingsButton:SetPoint("TOPRIGHT", panel.header, "TOPRIGHT", -48, -12)
+    panel.settingsButton:SetScript("OnClick", function()
+        if OpenSettingsFrame then
+            OpenSettingsFrame()
+        end
+    end)
+
+    panel.closeButton = CreateButton(panel.header, "X", 28, 28)
+    panel.closeButton:SetPoint("TOPRIGHT", panel.header, "TOPRIGHT", -12, -12)
+    panel.closeButton:SetScript("OnClick", function()
+        panel:Hide()
+    end)
+
+    panel.resizeButton = CreateFrame("Button", nil, panel)
+    panel.resizeButton:SetWidth(18)
+    panel.resizeButton:SetHeight(18)
+    panel.resizeButton:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -5, 5)
+    panel.resizeButton:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+    panel.resizeButton:SetHighlightTexture(
+        "Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight"
+    )
+    panel.resizeButton:SetPushedTexture(
+        "Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down"
+    )
+    panel.resizeButton:RegisterForDrag("LeftButton")
+    panel.resizeButton:RegisterForClicks("RightButtonUp")
+    panel.resizeButton:SetScript("OnDragStart", function()
+        if not InCombatLockdown() then
+            panel:StartSizing("BOTTOMRIGHT")
+        end
+    end)
+    panel.resizeButton:SetScript("OnDragStop", function()
+        panel:StopMovingOrSizing()
+        EbonholdProfessionsDB.panelWidth = math.floor(panel:GetWidth() + 0.5)
+        EbonholdProfessionsDB.panelHeight = math.floor(panel:GetHeight() + 0.5)
+        EbonholdProfessionsDB.panelSizeUserSet = true
+        EbonholdProfessions_SafeRefresh(false)
+    end)
+    panel.resizeButton:SetScript("OnClick", function(_, mouseButton)
+        if mouseButton == "RightButton" and not InCombatLockdown() then
+            EbonholdProfessionsDB.panelWidth = nil
+            EbonholdProfessionsDB.panelHeight = nil
+            EbonholdProfessionsDB.panelSizeUserSet = nil
+            panel:SetWidth(PANEL_WIDTH)
+            EbonholdProfessions_SafeRefresh(false)
+            Print("profession window size reset.")
+        end
+    end)
+    panel.resizeButton:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_TOPLEFT")
+        GameTooltip:SetText("Resize profession window", 1, 0.82, 0)
+        GameTooltip:AddLine("Left-drag: resize", 1, 1, 1)
+        GameTooltip:AddLine("Right-click: reset size", 0.7, 0.75, 0.82)
+        GameTooltip:Show()
+    end)
+    panel.resizeButton:SetScript("OnLeave", ProfessionButton_OnLeave)
+
+    panel.scrollFrame = CreateFrame("ScrollFrame", nil, panel)
+    panel.scrollFrame:SetPoint("TOPLEFT", panel, "TOPLEFT", 12, -70)
+    panel.scrollFrame:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -12, 40)
+    AddBackground(panel.scrollFrame, { 0.045, 0.052, 0.066, 1 }, { 0.10, 0.11, 0.14, 1 })
+    panel.scrollFrame:EnableMouseWheel(true)
+
+    panel.content = CreateFrame("Frame", nil, panel.scrollFrame)
+    panel.content:SetWidth(PANEL_WIDTH - 24)
+    panel.content:SetHeight(1)
+    panel.scrollFrame:SetScrollChild(panel.content)
+    panel.scrollFrame:SetScript("OnMouseWheel", function(self, delta)
+        local maximum = math.max(0, panel.content:GetHeight() - self:GetHeight())
+        local newValue = self:GetVerticalScroll() - delta * (BUTTON_HEIGHT + BUTTON_GAP)
+        self:SetVerticalScroll(math.max(0, math.min(maximum, newValue)))
+    end)
+
+    panel.emptyText = CreateText(panel, "No learned professions were found.", 12, COLORS.muted, "CENTER")
     panel.emptyText:SetPoint("CENTER", panel, "CENTER", 0, -18)
-    panel.emptyText:SetText("No learned professions were found.")
-    panel.emptyText:SetTextColor(0.65, 0.65, 0.65)
     panel.emptyText:Hide()
 
-    panel.hint = panel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    panel.hint = CreateText(panel, "", 9, COLORS.muted, "CENTER")
     panel.hint:SetPoint("BOTTOM", panel, "BOTTOM", 0, 15)
-    panel.hint:SetText("Drag this window by its background  -  /ehp toggles it")
+    panel.hint:SetText("Drag background  -  scroll list  -  resize bottom-right")
 
     panel:SetScript("OnShow", function()
         if not InCombatLockdown() then
@@ -677,6 +926,152 @@ local function CreatePanel()
             EndHotkeyCapture()
         end
     end)
+end
+
+local function CreateSettingToggle(parent, label, description, key, y, callback)
+    local button = CreateFrame("Button", nil, parent)
+    button:SetPoint("TOPLEFT", parent, "TOPLEFT", 20, y)
+    button:SetWidth(390)
+    button:SetHeight(48)
+    button.box = CreateFrame("Frame", nil, button)
+    button.box:SetPoint("TOPLEFT", button, "TOPLEFT", 0, -2)
+    button.box:SetWidth(20)
+    button.box:SetHeight(20)
+    AddBackground(button.box, COLORS.panelLight, COLORS.border)
+    button.mark = CreateText(button.box, "", 12, COLORS.gold, "CENTER")
+    button.mark:SetAllPoints()
+    button.label = CreateText(button, label, 11, COLORS.text)
+    button.label:SetPoint("TOPLEFT", button, "TOPLEFT", 30, -1)
+    button.description = CreateText(button, description, 9, COLORS.muted)
+    button.description:SetPoint("TOPLEFT", button, "TOPLEFT", 30, -22)
+    button.description:SetWidth(350)
+    button.description:SetJustifyV("TOP")
+    button.key = key
+
+    function button:Refresh()
+        local enabled = EbonholdProfessionsDB.settings[self.key] == true
+        self.mark:SetText(enabled and "X" or "")
+        if enabled then
+            self.box:SetBackdropBorderColor(
+                COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 1
+            )
+        else
+            self.box:SetBackdropBorderColor(
+                COLORS.border[1], COLORS.border[2], COLORS.border[3], 1
+            )
+        end
+    end
+
+    button:SetScript("OnEnter", function(self)
+        self.label:SetTextColor(
+            COLORS.gold[1], COLORS.gold[2], COLORS.gold[3]
+        )
+    end)
+    button:SetScript("OnLeave", function(self)
+        self.label:SetTextColor(
+            COLORS.text[1], COLORS.text[2], COLORS.text[3]
+        )
+    end)
+    button:SetScript("OnClick", function(self)
+        EbonholdProfessionsDB.settings[self.key] =
+            not EbonholdProfessionsDB.settings[self.key]
+        self:Refresh()
+        if callback then
+            callback(EbonholdProfessionsDB.settings[self.key])
+        end
+    end)
+    return button
+end
+
+local function CreateSettingsFrame()
+    settingsFrame = CreateFrame(
+        "Frame",
+        addonName .. "SettingsFrame",
+        UIParent
+    )
+    settingsFrame:SetWidth(440)
+    settingsFrame:SetHeight(255)
+    settingsFrame:SetPoint("CENTER", UIParent, "CENTER", 250, 35)
+    settingsFrame:SetFrameStrata("DIALOG")
+    settingsFrame:SetClampedToScreen(true)
+    settingsFrame:SetMovable(true)
+    settingsFrame:EnableMouse(true)
+    settingsFrame:RegisterForDrag("LeftButton")
+    settingsFrame:SetScript("OnDragStart", function(self)
+        self:StartMoving()
+    end)
+    settingsFrame:SetScript("OnDragStop", function(self)
+        self:StopMovingOrSizing()
+    end)
+    AddBackground(settingsFrame, COLORS.background, COLORS.gold)
+    table.insert(UISpecialFrames, settingsFrame:GetName())
+    settingsFrame:Hide()
+
+    settingsFrame.title = CreateText(
+        settingsFrame,
+        "Ebonhold Professions Settings",
+        18,
+        COLORS.text
+    )
+    settingsFrame.title:SetPoint("TOPLEFT", settingsFrame, "TOPLEFT", 20, -18)
+    settingsFrame.subtitle = CreateText(
+        settingsFrame,
+        "Choose how profession abilities interact with bag items.",
+        10,
+        COLORS.muted
+    )
+    settingsFrame.subtitle:SetPoint("TOPLEFT", settingsFrame, "TOPLEFT", 20, -44)
+
+    settingsFrame.closeButton = CreateButton(settingsFrame, "X", 28, 28)
+    settingsFrame.closeButton:SetPoint("TOPRIGHT", settingsFrame, "TOPRIGHT", -12, -12)
+    settingsFrame.closeButton:SetScript("OnClick", function()
+        settingsFrame:Hide()
+    end)
+
+    settingsFrame.sectionLabel = CreateText(
+        settingsFrame,
+        "ITEM PROCESSING",
+        9,
+        COLORS.gold
+    )
+    settingsFrame.sectionLabel:SetPoint("TOPLEFT", settingsFrame, "TOPLEFT", 20, -78)
+
+    settingsFrame.autoProcessToggle = CreateSettingToggle(
+        settingsFrame,
+        "Automatically find viable bag items",
+        "Prospecting, Milling, and Disenchant target the first eligible non-blacklisted item.",
+        "autoProcessItems",
+        -98,
+        function()
+            RefreshProcessingActions()
+        end
+    )
+
+    settingsFrame.manualNote = CreateText(
+        settingsFrame,
+        "When disabled, these abilities use normal manual targeting. Blacklists are kept and can still be edited.",
+        10,
+        COLORS.muted
+    )
+    settingsFrame.manualNote:SetPoint("TOPLEFT", settingsFrame, "TOPLEFT", 20, -168)
+    settingsFrame.manualNote:SetWidth(400)
+    settingsFrame.manualNote:SetJustifyV("TOP")
+
+    settingsFrame:SetScript("OnShow", function(self)
+        self.autoProcessToggle:Refresh()
+    end)
+end
+
+OpenSettingsFrame = function()
+    if not settingsFrame then
+        CreateSettingsFrame()
+    end
+
+    if settingsFrame:IsShown() then
+        settingsFrame:Hide()
+    else
+        settingsFrame:Show()
+    end
 end
 
 local function OpenLauncherMenu(buttonType)
@@ -718,6 +1113,13 @@ local function OpenLauncherMenu(buttonType)
             text = "Ebonhold Professions",
             isTitle = true,
             notCheckable = true,
+        },
+        {
+            text = "Settings",
+            notCheckable = true,
+            func = function()
+                OpenSettingsFrame()
+            end,
         },
         {
             text = isLocked and "Unlock position" or "Lock position",
@@ -765,6 +1167,7 @@ local function CreateLauncherButton()
     launcherButton:SetMovable(true)
     launcherButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     launcherButton:RegisterForDrag("RightButton")
+    AddBackground(launcherButton, COLORS.panel, COLORS.gold)
 
     local position = EbonholdProfessionsDB.launcherPosition
     if position then
@@ -779,19 +1182,13 @@ local function CreateLauncherButton()
         launcherButton:SetPoint("CENTER", UIParent, "CENTER", 0, -260)
     end
 
-    launcherButton.icon = launcherButton:CreateTexture(nil, "BACKGROUND")
-    launcherButton.icon:SetAllPoints()
+    -- Keep the icon above the custom backdrop. A BACKGROUND-layer texture is
+    -- hidden behind SetBackdrop's fill on Wrath-era clients.
+    launcherButton.icon = launcherButton:CreateTexture(nil, "ARTWORK")
+    launcherButton.icon:SetPoint("TOPLEFT", launcherButton, "TOPLEFT", 4, -4)
+    launcherButton.icon:SetPoint("BOTTOMRIGHT", launcherButton, "BOTTOMRIGHT", -4, 4)
     launcherButton.icon:SetTexture(LAUNCHER_ICON)
     launcherButton.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-
-    launcherButton.border = launcherButton:CreateTexture(nil, "OVERLAY")
-    launcherButton.border:SetTexture("Interface\\Buttons\\UI-Quickslot2")
-    launcherButton.border:SetWidth(60)
-    launcherButton.border:SetHeight(60)
-    launcherButton.border:SetPoint("CENTER")
-
-    launcherButton:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square")
-    launcherButton:SetPushedTexture("Interface\\Buttons\\UI-Quickslot-Depress")
 
     launcherButton:SetScript("OnClick", function(self, mouseButton)
         if self.ignoreClick then
@@ -826,6 +1223,10 @@ local function CreateLauncherButton()
     end)
     launcherButton:SetScript("OnEnter", function(self)
         self:SetAlpha(1)
+        self:SetBackdropColor(0.14, 0.16, 0.20, 1)
+        self:SetBackdropBorderColor(
+            COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 1
+        )
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:SetText("Ebonhold Professions", 1, 0.82, 0)
         GameTooltip:AddLine("Left-click: open professions", 1, 1, 1)
@@ -839,6 +1240,9 @@ local function CreateLauncherButton()
     end)
     launcherButton:SetScript("OnLeave", function(self)
         GameTooltip:Hide()
+        self:SetBackdropColor(
+            COLORS.panel[1], COLORS.panel[2], COLORS.panel[3], COLORS.panel[4]
+        )
         self:SetAlpha((EbonholdProfessionsDB.floatingButtonOpacity or 100) / 100)
     end)
     launcherButton:SetAlpha(EbonholdProfessionsDB.floatingButtonOpacity / 100)
@@ -986,22 +1390,175 @@ local function GetBagItemID(bag, slot, itemLink)
     end
 end
 
-local function FindAllowedBagSlot(entryKey, minimumCount)
-    local allowedItems = EbonholdProfessionsDB.itemLists[entryKey]
-    if type(allowedItems) ~= "table" then
-        return
+local disenchantEquipLocations = {
+    INVTYPE_HEAD = true,
+    INVTYPE_NECK = true,
+    INVTYPE_SHOULDER = true,
+    INVTYPE_BODY = true,
+    INVTYPE_CHEST = true,
+    INVTYPE_ROBE = true,
+    INVTYPE_WAIST = true,
+    INVTYPE_LEGS = true,
+    INVTYPE_FEET = true,
+    INVTYPE_WRIST = true,
+    INVTYPE_HAND = true,
+    INVTYPE_FINGER = true,
+    INVTYPE_TRINKET = true,
+    INVTYPE_CLOAK = true,
+    INVTYPE_WEAPON = true,
+    INVTYPE_SHIELD = true,
+    INVTYPE_2HWEAPON = true,
+    INVTYPE_WEAPONMAINHAND = true,
+    INVTYPE_WEAPONOFFHAND = true,
+    INVTYPE_HOLDABLE = true,
+    INVTYPE_RANGED = true,
+    INVTYPE_THROWN = true,
+    INVTYPE_RANGEDRIGHT = true,
+    INVTYPE_RELIC = true,
+}
+
+local function LowerText(value)
+    if type(value) ~= "string" then
+        return ""
     end
+    return string.lower(value)
+end
+
+local function TooltipContainsPhrase(tooltipText, phrase)
+    phrase = LowerText(phrase)
+    if phrase == "" then
+        return false
+    end
+
+    local formatPosition = string.find(phrase, "%", 1, true)
+    if formatPosition then
+        phrase = string.sub(phrase, 1, formatPosition - 1)
+        phrase = string.gsub(phrase, "%s+$", "")
+    end
+
+    return #phrase >= 4
+        and string.find(tooltipText, phrase, 1, true) ~= nil
+end
+
+local function GetBagItemTooltipText(bag, slot)
+    if not itemScanTooltip then
+        itemScanTooltip = CreateFrame(
+            "GameTooltip",
+            addonName .. "ItemScanTooltip",
+            UIParent,
+            "GameTooltipTemplate"
+        )
+    end
+
+    itemScanTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    itemScanTooltip:ClearLines()
+    local tooltipOK = pcall(
+        itemScanTooltip.SetBagItem,
+        itemScanTooltip,
+        bag,
+        slot
+    )
+    if not tooltipOK then
+        itemScanTooltip:Hide()
+        return ""
+    end
+
+    local textLines = {}
+    local tooltipName = itemScanTooltip:GetName()
+    for lineIndex = 1, (itemScanTooltip:NumLines() or 0) do
+        local leftLine = _G[tooltipName .. "TextLeft" .. lineIndex]
+        local rightLine = _G[tooltipName .. "TextRight" .. lineIndex]
+        if leftLine and leftLine:GetText() then
+            table.insert(textLines, leftLine:GetText())
+        end
+        if rightLine and rightLine:GetText() then
+            table.insert(textLines, rightLine:GetText())
+        end
+    end
+    itemScanTooltip:Hide()
+    return LowerText(table.concat(textLines, " "))
+end
+
+local function IsBagItemProcessable(processorType, bag, slot, itemID, itemLink)
+    local cacheKey = tostring(processorType) .. ":" .. tostring(itemID)
+    if processabilityCache[cacheKey] ~= nil then
+        return processabilityCache[cacheKey]
+    end
+
+    local tooltipText = GetBagItemTooltipText(bag, slot)
+    local itemName, _, quality, _, _, itemType, itemSubType, _, equipLocation =
+        GetItemInfo(itemLink or itemID)
+    local itemNameLower = LowerText(itemName)
+    local itemTypeLower = LowerText(itemType)
+    local itemSubTypeLower = LowerText(itemSubType)
+    local processable = false
+
+    if processorType == "PROSPECTING" then
+        processable = TooltipContainsPhrase(tooltipText, _G.ITEM_PROSPECTABLE)
+            or string.find(tooltipText, "prospectable", 1, true) ~= nil
+            or string.find(itemNameLower, " ore", 1, true) ~= nil
+            or string.match(itemNameLower, "^ore ") ~= nil
+    elseif processorType == "MILLING" then
+        processable = TooltipContainsPhrase(tooltipText, _G.ITEM_MILLABLE)
+            or string.find(tooltipText, "millable", 1, true) ~= nil
+            or string.find(itemSubTypeLower, "herb", 1, true) ~= nil
+            or itemTypeLower == "herb"
+    elseif processorType == "DISENCHANT" then
+        local explicitlyBlocked =
+            TooltipContainsPhrase(
+                tooltipText,
+                _G.ITEM_DISENCHANT_NOT_DISENCHANTABLE
+            )
+            or string.find(tooltipText, "cannot be disenchanted", 1, true) ~= nil
+            or string.find(tooltipText, "not disenchantable", 1, true) ~= nil
+        local explicitlyAllowed =
+            TooltipContainsPhrase(tooltipText, _G.ITEM_DISENCHANT_ANY_SKILL)
+            or TooltipContainsPhrase(tooltipText, _G.ITEM_DISENCHANT_MIN_SKILL)
+            or string.find(tooltipText, "disenchanting requires", 1, true) ~= nil
+
+        if not explicitlyBlocked then
+            processable = explicitlyAllowed
+                or (
+                    type(quality) == "number"
+                    and quality >= 2
+                    and quality <= 4
+                    and disenchantEquipLocations[equipLocation]
+                )
+        end
+    end
+
+    if itemName or processable then
+        processabilityCache[cacheKey] = processable and true or false
+    end
+    return processable
+end
+
+local function FindProcessableBagSlot(profession)
+    local blacklistedItems =
+        EbonholdProfessionsDB.itemBlacklists[profession.key] or {}
 
     for bag = 0, (NUM_BAG_SLOTS or 4) do
         for slot = 1, GetContainerNumSlots(bag) do
             local _, count, locked, _, _, _, itemLink =
                 GetContainerItemInfo(bag, slot)
             local itemID = GetBagItemID(bag, slot, itemLink)
+            local isBlacklisted = itemID
+                and (
+                    blacklistedItems[itemID]
+                    or blacklistedItems[tostring(itemID)]
+                )
 
             if itemID
-                and allowedItems[itemID]
+                and not isBlacklisted
                 and not locked
-                and (count or 0) >= (minimumCount or 1)
+                and (count or 0) >= (profession.minimumCount or 1)
+                and IsBagItemProcessable(
+                    profession.processorType,
+                    bag,
+                    slot,
+                    itemID,
+                    itemLink
+                )
             then
                 return bag, slot, itemID
             end
@@ -1012,27 +1569,18 @@ end
 local function ConfigureSecureAction(button, profession)
     local actionType
     local spellName
-    local macroText
+    local targetBag
+    local targetSlot
 
     if profession.actionName then
         actionType = "spell"
         spellName = profession.actionName
 
-        if profession.itemProcessor then
-            local bag, slot = FindAllowedBagSlot(
-                profession.key,
-                profession.minimumCount
-            )
+        if profession.itemProcessor and IsAutomaticProcessingEnabled() then
+            local bag, slot = FindProcessableBagSlot(profession)
             if bag and slot then
-                actionType = "macro"
-                spellName = nil
-                macroText =
-                    "/cast "
-                    .. profession.actionName
-                    .. "\n/use "
-                    .. bag
-                    .. " "
-                    .. slot
+                targetBag = bag
+                targetSlot = slot
             end
         end
     end
@@ -1045,9 +1593,15 @@ local function ConfigureSecureAction(button, profession)
     button:SetAttribute("type", nil)
     button:SetAttribute("spell", nil)
     button:SetAttribute("macrotext", nil)
+    button:SetAttribute("target-bag", nil)
+    button:SetAttribute("target-slot", nil)
+    button:SetAttribute("target-item", nil)
     button:SetAttribute("type1", nil)
     button:SetAttribute("spell1", nil)
     button:SetAttribute("macrotext1", nil)
+    button:SetAttribute("target-bag1", nil)
+    button:SetAttribute("target-slot1", nil)
+    button:SetAttribute("target-item1", nil)
 
     if actionType then
         -- The unsuffixed attributes are the original SecureActionButton
@@ -1055,10 +1609,12 @@ local function ConfigureSecureAction(button, profession)
         -- compatibility with both stock and custom 3.3.5 clients.
         button:SetAttribute("type", actionType)
         button:SetAttribute("spell", spellName)
-        button:SetAttribute("macrotext", macroText)
+        button:SetAttribute("target-bag", targetBag)
+        button:SetAttribute("target-slot", targetSlot)
         button:SetAttribute("type1", actionType)
         button:SetAttribute("spell1", spellName)
-        button:SetAttribute("macrotext1", macroText)
+        button:SetAttribute("target-bag1", targetBag)
+        button:SetAttribute("target-slot1", targetSlot)
     end
 
     if wasShown then
@@ -1248,12 +1804,12 @@ local function RefreshItemListPanel()
         return
     end
 
-    local allowedItems =
-        EbonholdProfessionsDB.itemLists[itemListPanel.currentEntryKey] or {}
+    local blacklistedItems =
+        EbonholdProfessionsDB.itemBlacklists[itemListPanel.currentEntryKey] or {}
     local items = {}
 
-    for itemID, allowed in pairs(allowedItems) do
-        if allowed then
+    for itemID, blacklisted in pairs(blacklistedItems) do
+        if blacklisted then
             local itemName, itemLink, _, _, _, _, _, _, _, itemTexture =
                 GetItemInfo(itemID)
             table.insert(items, {
@@ -1281,16 +1837,7 @@ local function RefreshItemListPanel()
             row:SetWidth(332)
             row:SetHeight(34)
             row:RegisterForClicks("RightButtonUp")
-            row:SetBackdrop({
-                bgFile = "Interface\\Buttons\\WHITE8X8",
-                edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-                tile = true,
-                tileSize = 8,
-                edgeSize = 10,
-                insets = { left = 2, right = 2, top = 2, bottom = 2 },
-            })
-            row:SetBackdropColor(0.05, 0.06, 0.08, 0.96)
-            row:SetBackdropBorderColor(0.22, 0.25, 0.30, 1)
+            AddBackground(row, COLORS.panel, COLORS.border)
 
             row.icon = row:CreateTexture(nil, "ARTWORK")
             row.icon:SetWidth(28)
@@ -1298,19 +1845,20 @@ local function RefreshItemListPanel()
             row.icon:SetPoint("LEFT", row, "LEFT", 5, 0)
             row.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
-            row.nameText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            row.nameText = CreateText(row, "", 11, COLORS.text)
             row.nameText:SetPoint("LEFT", row.icon, "RIGHT", 8, 0)
             row.nameText:SetPoint("RIGHT", row, "RIGHT", -58, 0)
             row.nameText:SetJustifyH("LEFT")
 
-            row.removeText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            row.removeText = CreateText(row, "REMOVE", 9, COLORS.red, "RIGHT")
             row.removeText:SetPoint("RIGHT", row, "RIGHT", -8, 0)
-            row.removeText:SetText("REMOVE")
-            row.removeText:SetTextColor(1, 0.35, 0.35)
+            row.removeText:SetTextColor(
+                COLORS.red[1], COLORS.red[2], COLORS.red[3]
+            )
 
             row:SetScript("OnClick", function(self)
                 local list =
-                    EbonholdProfessionsDB.itemLists[itemListPanel.currentEntryKey]
+                    EbonholdProfessionsDB.itemBlacklists[itemListPanel.currentEntryKey]
                 if list and self.itemID then
                     list[self.itemID] = nil
                     RefreshItemListPanel()
@@ -1318,16 +1866,28 @@ local function RefreshItemListPanel()
                 end
             end)
             row:SetScript("OnEnter", function(self)
+                self:SetBackdropColor(0.14, 0.16, 0.20, 1)
+                self:SetBackdropBorderColor(
+                    COLORS.gold[1], COLORS.gold[2], COLORS.gold[3], 0.8
+                )
                 GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
                 if self.itemLink then
                     GameTooltip:SetHyperlink(self.itemLink)
                 else
                     GameTooltip:SetText(self.itemName or "Item")
                 end
-                GameTooltip:AddLine("Right-click to remove from this list.", 1, 0.35, 0.35)
+                GameTooltip:AddLine("Right-click to remove from the blacklist.", 1, 0.35, 0.35)
                 GameTooltip:Show()
             end)
-            row:SetScript("OnLeave", ProfessionButton_OnLeave)
+            row:SetScript("OnLeave", function(self)
+                self:SetBackdropColor(
+                    COLORS.panel[1], COLORS.panel[2], COLORS.panel[3], COLORS.panel[4]
+                )
+                self:SetBackdropBorderColor(
+                    COLORS.border[1], COLORS.border[2], COLORS.border[3], 1
+                )
+                GameTooltip:Hide()
+            end)
             itemListRows[index] = row
         end
 
@@ -1347,7 +1907,7 @@ local function RefreshItemListPanel()
 
     itemListPanel.countText:SetText(
         #items
-            .. " allowed item"
+            .. " blacklisted item"
             .. (#items == 1 and "" or "s")
             .. "  -  mouse wheel scrolls"
     )
@@ -1372,11 +1932,11 @@ local function AddCursorItemToList()
     end
 
     local entryKey = itemListPanel.currentEntryKey
-    if type(EbonholdProfessionsDB.itemLists[entryKey]) ~= "table" then
-        EbonholdProfessionsDB.itemLists[entryKey] = {}
+    if type(EbonholdProfessionsDB.itemBlacklists[entryKey]) ~= "table" then
+        EbonholdProfessionsDB.itemBlacklists[entryKey] = {}
     end
 
-    EbonholdProfessionsDB.itemLists[entryKey][itemID] = true
+    EbonholdProfessionsDB.itemBlacklists[entryKey][itemID] = true
     ClearCursor()
     RefreshItemListPanel()
     RefreshProcessingActions()
@@ -1387,7 +1947,7 @@ local function AddCursorItemToList()
             .. itemName
             .. "|r added to the "
             .. itemListPanel.currentAbilityName
-            .. " list."
+            .. " blacklist."
     )
 end
 
@@ -1401,14 +1961,7 @@ local function CreateItemListPanel()
     itemListPanel:SetMovable(true)
     itemListPanel:EnableMouse(true)
     itemListPanel:RegisterForDrag("LeftButton")
-    itemListPanel:SetBackdrop({
-        bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
-        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-        tile = true,
-        tileSize = 32,
-        edgeSize = 32,
-        insets = { left = 11, right = 12, top = 12, bottom = 11 },
-    })
+    AddBackground(itemListPanel, COLORS.background, COLORS.gold)
     itemListPanel:SetScript("OnDragStart", function(self)
         self:StartMoving()
     end)
@@ -1416,36 +1969,28 @@ local function CreateItemListPanel()
         self:StopMovingOrSizing()
     end)
 
-    itemListPanel.title = itemListPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    itemListPanel.title = CreateText(itemListPanel, "", 18, COLORS.text)
     itemListPanel.title:SetPoint("TOPLEFT", itemListPanel, "TOPLEFT", 20, -18)
-    itemListPanel.title:SetTextColor(1, 0.82, 0)
 
-    itemListPanel.closeButton = CreateFrame(
-        "Button",
-        addonName .. "ItemListCloseButton",
-        itemListPanel,
-        "UIPanelCloseButton"
-    )
-    itemListPanel.closeButton:SetPoint("TOPRIGHT", itemListPanel, "TOPRIGHT", -5, -5)
+    itemListPanel.closeButton = CreateButton(itemListPanel, "X", 28, 28)
+    itemListPanel.closeButton:SetPoint("TOPRIGHT", itemListPanel, "TOPRIGHT", -12, -12)
+    itemListPanel.closeButton:SetScript("OnClick", function()
+        itemListPanel:Hide()
+    end)
 
     itemListPanel.dropZone = CreateFrame("Button", nil, itemListPanel)
     itemListPanel.dropZone:SetPoint("TOPLEFT", itemListPanel, "TOPLEFT", 20, -52)
     itemListPanel.dropZone:SetPoint("TOPRIGHT", itemListPanel, "TOPRIGHT", -20, -52)
     itemListPanel.dropZone:SetHeight(52)
-    itemListPanel.dropZone:SetBackdrop({
-        bgFile = "Interface\\Buttons\\WHITE8X8",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile = true,
-        tileSize = 8,
-        edgeSize = 12,
-        insets = { left = 3, right = 3, top = 3, bottom = 3 },
-    })
-    itemListPanel.dropZone:SetBackdropColor(0.05, 0.12, 0.16, 0.95)
-    itemListPanel.dropZone:SetBackdropBorderColor(0.35, 0.8, 1, 1)
-    itemListPanel.dropZone.text =
-        itemListPanel.dropZone:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    AddBackground(itemListPanel.dropZone, COLORS.panel, COLORS.gold)
+    itemListPanel.dropZone.text = CreateText(
+        itemListPanel.dropZone,
+        "Drag a bag item here to blacklist it",
+        11,
+        COLORS.text,
+        "CENTER"
+    )
     itemListPanel.dropZone.text:SetPoint("CENTER")
-    itemListPanel.dropZone.text:SetText("Drag a bag item here to add it")
     itemListPanel.dropZone:SetScript("OnReceiveDrag", AddCursorItemToList)
     itemListPanel.dropZone:SetScript("OnClick", AddCursorItemToList)
 
@@ -1465,22 +2010,15 @@ local function CreateItemListPanel()
         self:SetVerticalScroll(math.max(0, math.min(maximum, newValue)))
     end)
 
-    itemListPanel.countText =
-        itemListPanel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    itemListPanel.countText = CreateText(itemListPanel, "", 9, COLORS.muted)
     itemListPanel.countText:SetPoint("BOTTOMLEFT", itemListPanel, "BOTTOMLEFT", 22, 22)
 
-    itemListPanel.clearButton = CreateFrame(
-        "Button",
-        nil,
-        itemListPanel,
-        "UIPanelButtonTemplate"
-    )
-    itemListPanel.clearButton:SetWidth(82)
+    itemListPanel.clearButton = CreateButton(itemListPanel, "Clear Blacklist", 110, 24)
+    itemListPanel.clearButton:SetWidth(110)
     itemListPanel.clearButton:SetHeight(22)
     itemListPanel.clearButton:SetPoint("BOTTOMRIGHT", itemListPanel, "BOTTOMRIGHT", -20, 18)
-    itemListPanel.clearButton:SetText("Clear List")
     itemListPanel.clearButton:SetScript("OnClick", function()
-        EbonholdProfessionsDB.itemLists[itemListPanel.currentEntryKey] = {}
+        EbonholdProfessionsDB.itemBlacklists[itemListPanel.currentEntryKey] = {}
         RefreshItemListPanel()
         RefreshProcessingActions()
     end)
@@ -1496,7 +2034,7 @@ OpenItemListEditor = function(button)
 
     itemListPanel.currentEntryKey = button.entryKey
     itemListPanel.currentAbilityName = button.professionName
-    itemListPanel.title:SetText(button.professionName .. " Allowed Items")
+    itemListPanel.title:SetText(button.professionName .. " Blacklist")
     itemListPanel.scroll:SetVerticalScroll(0)
     RefreshItemListPanel()
     itemListPanel:Show()
@@ -1555,7 +2093,20 @@ OpenProfessionMenu = function(button)
 
     if button.itemProcessor then
         table.insert(menu, {
-            text = "Edit allowed items",
+            text = "Automatic bag targeting: "
+                .. (IsAutomaticProcessingEnabled() and "Enabled" or "Disabled"),
+            notCheckable = true,
+            func = function()
+                EbonholdProfessionsDB.settings.autoProcessItems =
+                    not IsAutomaticProcessingEnabled()
+                if settingsFrame and settingsFrame.autoProcessToggle then
+                    settingsFrame.autoProcessToggle:Refresh()
+                end
+                RefreshProcessingActions()
+            end,
+        })
+        table.insert(menu, {
+            text = "Edit blacklist",
             notCheckable = true,
             func = function()
                 OpenItemListEditor(button)
@@ -1592,11 +2143,32 @@ local function ConfigureHotkeyButton(index, profession)
         button:SetAttribute("type", nil)
         button:SetAttribute("spell", nil)
         button:SetAttribute("macrotext", nil)
+        button:SetAttribute("target-bag", nil)
+        button:SetAttribute("target-slot", nil)
+        button:SetAttribute("target-item", nil)
         button:SetAttribute("type1", nil)
         button:SetAttribute("spell1", nil)
         button:SetAttribute("macrotext1", nil)
+        button:SetAttribute("target-bag1", nil)
+        button:SetAttribute("target-slot1", nil)
+        button:SetAttribute("target-item1", nil)
         button:Hide()
     end
+end
+
+local function GetSectionHeader(index)
+    local header = sectionHeaders[index]
+    if not header then
+        header = CreateText(panel.content, "", 11, COLORS.gold)
+        header:SetWidth(PANEL_WIDTH - 40)
+        header:SetHeight(SECTION_HEADER_HEIGHT)
+        header:SetJustifyH("LEFT")
+        header:SetTextColor(
+            COLORS.gold[1], COLORS.gold[2], COLORS.gold[3]
+        )
+        sectionHeaders[index] = header
+    end
+    return header
 end
 
 function EbonholdProfessions_Refresh()
@@ -1607,27 +2179,168 @@ function EbonholdProfessions_Refresh()
 
     local known = FindKnownProfessions()
     hotkeyTargets = {}
-    local rows = math.max(1, math.ceil(#known / COLUMNS))
-    local contentTop = 66
-    local contentHeight = rows * BUTTON_HEIGHT + (rows - 1) * BUTTON_GAP
-    panel:SetHeight(contentTop + contentHeight + 42)
+    local grouped = {}
+    local layout = {}
+    local visibleHeaders = 0
+    local maximumPanelWidth = math.max(
+        MIN_PANEL_WIDTH,
+        (UIParent:GetWidth() or 1024) - 40
+    )
+    local panelWidth = math.max(
+        MIN_PANEL_WIDTH,
+        math.min(panel:GetWidth() or PANEL_WIDTH, maximumPanelWidth)
+    )
+    if panel:GetWidth() ~= panelWidth then
+        panel:SetWidth(panelWidth)
+    end
 
-    for index, profession in ipairs(known) do
+    local contentWidth = math.max(1, panelWidth - 24)
+    panel.content:SetWidth(contentWidth)
+
+    local sectionColumnCount = panelWidth >= WIDE_SECTION_THRESHOLD and 2 or 1
+    local sectionWidth = (
+        contentWidth - SECTION_COLUMN_GAP * (sectionColumnCount - 1)
+    ) / sectionColumnCount
+    local sectionInnerWidth = math.max(1, sectionWidth - 8)
+    local buttonColumnCount = sectionInnerWidth >= TWO_BUTTON_COLUMN_WIDTH and 2 or 1
+    local buttonWidth = (
+        sectionInnerWidth - BUTTON_GAP * (buttonColumnCount - 1)
+    ) / buttonColumnCount
+
+    for _, section in ipairs(sectionDefinitions) do
+        grouped[section.key] = {}
+    end
+    for _, profession in ipairs(known) do
+        local sectionKey = profession.section or "MAIN"
+        if not grouped[sectionKey] then
+            grouped[sectionKey] = {}
+        end
+        table.insert(grouped[sectionKey], profession)
+    end
+
+    local populatedSectionCount = 0
+    for _, section in ipairs(sectionDefinitions) do
+        if grouped[section.key] and #grouped[section.key] > 0 then
+            populatedSectionCount = populatedSectionCount + 1
+        end
+    end
+
+    if populatedSectionCount < 2 and sectionColumnCount == 2 then
+        sectionColumnCount = 1
+        sectionWidth = contentWidth
+        sectionInnerWidth = math.max(1, sectionWidth - 8)
+        buttonColumnCount = sectionInnerWidth >= TWO_BUTTON_COLUMN_WIDTH and 2 or 1
+        buttonWidth = (
+            sectionInnerWidth - BUTTON_GAP * (buttonColumnCount - 1)
+        ) / buttonColumnCount
+    end
+
+    local sectionColumnHeights = {}
+    for column = 1, sectionColumnCount do
+        sectionColumnHeights[column] = 2
+    end
+
+    for _, section in ipairs(sectionDefinitions) do
+        local entries = grouped[section.key]
+        if entries and #entries > 0 then
+            local targetColumn = 1
+            if sectionColumnCount == 2
+                and sectionColumnHeights[2] < sectionColumnHeights[1]
+            then
+                targetColumn = 2
+            end
+
+            local sectionX = (targetColumn - 1)
+                * (sectionWidth + SECTION_COLUMN_GAP)
+            local sectionY = sectionColumnHeights[targetColumn]
+            visibleHeaders = visibleHeaders + 1
+            local header = GetSectionHeader(visibleHeaders)
+            header:ClearAllPoints()
+            header:SetPoint(
+                "TOPLEFT",
+                panel.content,
+                "TOPLEFT",
+                sectionX + 4,
+                -sectionY
+            )
+            header:SetWidth(sectionInnerWidth)
+            header:SetText(section.label .. "  |cff707780(" .. #entries .. ")|r")
+            header:Show()
+
+            local buttonStartY = sectionY
+                + SECTION_HEADER_HEIGHT
+                + SECTION_HEADER_GAP
+            for sectionIndex, profession in ipairs(entries) do
+                local column = (sectionIndex - 1) % buttonColumnCount
+                local row = math.floor((sectionIndex - 1) / buttonColumnCount)
+                table.insert(layout, {
+                    profession = profession,
+                    width = buttonWidth,
+                    x = sectionX + 4 + column * (buttonWidth + BUTTON_GAP),
+                    y = buttonStartY + row * (BUTTON_HEIGHT + BUTTON_GAP),
+                })
+            end
+
+            local rows = math.ceil(#entries / buttonColumnCount)
+            local sectionHeight = SECTION_HEADER_HEIGHT
+                + SECTION_HEADER_GAP
+                + rows * BUTTON_HEIGHT
+                + math.max(0, rows - 1) * BUTTON_GAP
+                + SECTION_GAP
+            sectionColumnHeights[targetColumn] = sectionY + sectionHeight
+        end
+    end
+
+    for index = visibleHeaders + 1, #sectionHeaders do
+        sectionHeaders[index]:Hide()
+    end
+
+    local contentHeight = 1
+    for column = 1, sectionColumnCount do
+        contentHeight = math.max(contentHeight, sectionColumnHeights[column])
+    end
+    contentHeight = math.max(1, contentHeight - SECTION_GAP + 4)
+    local maximumPanelHeight = math.max(
+        MIN_PANEL_HEIGHT,
+        (UIParent:GetHeight() or 768) - 40
+    )
+    local desiredPanelHeight = contentHeight + 110
+    if EbonholdProfessionsDB.panelSizeUserSet then
+        panel:SetHeight(
+            math.max(
+                MIN_PANEL_HEIGHT,
+                math.min(panel:GetHeight() or MIN_PANEL_HEIGHT, maximumPanelHeight)
+            )
+        )
+    else
+        panel:SetHeight(math.max(150, math.min(desiredPanelHeight, maximumPanelHeight)))
+    end
+    panel.content:SetHeight(math.max(contentHeight, panel.scrollFrame:GetHeight()))
+
+    local maximumScroll = math.max(
+        0,
+        panel.content:GetHeight() - panel.scrollFrame:GetHeight()
+    )
+    panel.scrollFrame:SetVerticalScroll(
+        math.min(panel.scrollFrame:GetVerticalScroll(), maximumScroll)
+    )
+
+    for index, layoutEntry in ipairs(layout) do
+        local profession = layoutEntry.profession
         local button = professionButtons[index]
         if not button then
             button = CreateProfessionButton(index)
             professionButtons[index] = button
         end
 
-        local column = (index - 1) % COLUMNS
-        local row = math.floor((index - 1) / COLUMNS)
+        button:SetWidth(layoutEntry.width)
         button:ClearAllPoints()
         button:SetPoint(
             "TOPLEFT",
-            panel,
+            panel.content,
             "TOPLEFT",
-            PANEL_PADDING + column * (BUTTON_WIDTH + BUTTON_GAP),
-            -contentTop - row * (BUTTON_HEIGHT + BUTTON_GAP)
+            layoutEntry.x,
+            -layoutEntry.y
         )
 
         local rankText = ""
@@ -1641,6 +2354,7 @@ function EbonholdProfessions_Refresh()
         button.actionName = profession.actionName
         button.isUtility = profession.isUtility
         button.itemProcessor = profession.itemProcessor
+        button.processorType = profession.processorType
         button.minimumCount = profession.minimumCount
         button.professionData = profession
         button.hotkey = EbonholdProfessionsDB.hotkeys[profession.key]
@@ -1654,13 +2368,20 @@ function EbonholdProfessions_Refresh()
         if profession.actionName then
             ConfigureSecureAction(button, profession)
             button.icon:SetVertexColor(1, 1, 1)
-            button.nameText:SetTextColor(1, 0.82, 0)
-            SetButtonBackdrop(button, 0.055, 0.065, 0.085, 0.98)
+            button.nameText:SetTextColor(
+                COLORS.text[1], COLORS.text[2], COLORS.text[3]
+            )
+            SetButtonBackdrop(
+                button,
+                COLORS.panel[1], COLORS.panel[2], COLORS.panel[3], COLORS.panel[4]
+            )
         else
             ConfigureSecureAction(button, profession)
             button.icon:SetVertexColor(0.45, 0.45, 0.45)
-            button.nameText:SetTextColor(0.72, 0.72, 0.72)
-            SetButtonBackdrop(button, 0.045, 0.05, 0.06, 0.9)
+            button.nameText:SetTextColor(
+                COLORS.muted[1], COLORS.muted[2], COLORS.muted[3]
+            )
+            SetButtonBackdrop(button, 0.045, 0.052, 0.066, 1)
         end
 
         button:Show()
@@ -1669,9 +2390,22 @@ function EbonholdProfessions_Refresh()
 
     for index = #known + 1, #professionButtons do
         professionButtons[index]:Hide()
+        professionButtons[index]:SetAttribute("type", nil)
+        professionButtons[index]:SetAttribute("spell", nil)
+        professionButtons[index]:SetAttribute("macrotext", nil)
+        professionButtons[index]:SetAttribute("target-bag", nil)
+        professionButtons[index]:SetAttribute("target-slot", nil)
+        professionButtons[index]:SetAttribute("target-item", nil)
+        professionButtons[index]:SetAttribute("type1", nil)
+        professionButtons[index]:SetAttribute("spell1", nil)
+        professionButtons[index]:SetAttribute("macrotext1", nil)
+        professionButtons[index]:SetAttribute("target-bag1", nil)
+        professionButtons[index]:SetAttribute("target-slot1", nil)
+        professionButtons[index]:SetAttribute("target-item1", nil)
         professionButtons[index].entryKey = nil
         professionButtons[index].hotkey = nil
         professionButtons[index].itemProcessor = nil
+        professionButtons[index].processorType = nil
         professionButtons[index].professionData = nil
         professionButtons[index].hotkeyLabel:SetText("")
     end
@@ -1680,9 +2414,15 @@ function EbonholdProfessions_Refresh()
         hotkeyButtons[index]:SetAttribute("type", nil)
         hotkeyButtons[index]:SetAttribute("spell", nil)
         hotkeyButtons[index]:SetAttribute("macrotext", nil)
+        hotkeyButtons[index]:SetAttribute("target-bag", nil)
+        hotkeyButtons[index]:SetAttribute("target-slot", nil)
+        hotkeyButtons[index]:SetAttribute("target-item", nil)
         hotkeyButtons[index]:SetAttribute("type1", nil)
         hotkeyButtons[index]:SetAttribute("spell1", nil)
         hotkeyButtons[index]:SetAttribute("macrotext1", nil)
+        hotkeyButtons[index]:SetAttribute("target-bag1", nil)
+        hotkeyButtons[index]:SetAttribute("target-slot1", nil)
+        hotkeyButtons[index]:SetAttribute("target-item1", nil)
     end
 
     if #known == 0 then
@@ -1806,6 +2546,8 @@ local function HandleSlashCommand(input)
     elseif command == "debug" then
         EbonholdProfessions_SafeRefresh(true)
         PrintDiagnostics()
+    elseif command == "settings" then
+        OpenSettingsFrame()
     elseif command == "button" then
         if launcherButton:IsShown() then
             launcherButton:Hide()
@@ -1823,7 +2565,7 @@ local function HandleSlashCommand(input)
             EbonholdProfessionsDB.minimapButtonShown = true
         end
     else
-        Print("commands: /ehp, /ehp refresh, /ehp debug, /ehp button, /ehp minimap")
+        Print("commands: /ehp, /ehp refresh, /ehp debug, /ehp settings, /ehp button, /ehp minimap")
     end
 end
 
@@ -1863,8 +2605,14 @@ eventFrame:SetScript("OnEvent", function(self, event, argument)
         if type(EbonholdProfessionsDB.hotkeys) ~= "table" then
             EbonholdProfessionsDB.hotkeys = {}
         end
-        if type(EbonholdProfessionsDB.itemLists) ~= "table" then
-            EbonholdProfessionsDB.itemLists = {}
+        if type(EbonholdProfessionsDB.itemBlacklists) ~= "table" then
+            EbonholdProfessionsDB.itemBlacklists = {}
+        end
+        if type(EbonholdProfessionsDB.settings) ~= "table" then
+            EbonholdProfessionsDB.settings = {}
+        end
+        if EbonholdProfessionsDB.settings.autoProcessItems == nil then
+            EbonholdProfessionsDB.settings.autoProcessItems = true
         end
 
         CreatePanel()
